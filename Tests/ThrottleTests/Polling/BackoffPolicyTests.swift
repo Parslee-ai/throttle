@@ -95,4 +95,39 @@ final class BackoffPolicyTests: XCTestCase {
         policy.record(outcome: .rateLimited(retryAfter: 900), for: b, provider: .anthropic, now: t0) // +900 provider-wide
         XCTAssertEqual(horizon(policy, a, .anthropic), 900)
     }
+
+    // MARK: Provider horizons survive a relaunch (ISC-99)
+
+    func testProviderHorizonsReportOnlyActiveProviderWideLimits() {
+        var policy = BackoffPolicy()
+        policy.record(outcome: .rateLimited(retryAfter: 900), for: a, provider: .anthropic, now: t0)
+        policy.record(outcome: .rateLimited(retryAfter: 900), for: b, provider: .openai, now: t0)
+        policy.record(outcome: .failure, for: b, provider: .anthropic, now: t0)
+
+        XCTAssertEqual(policy.providerHorizons(now: t0), [.anthropic: t0.addingTimeInterval(900)],
+                       "OpenAI limits per account and errors are per account; neither is provider-wide")
+        XCTAssertEqual(policy.providerHorizons(now: t0.addingTimeInterval(900)), [:], "an elapsed horizon is not reported")
+    }
+
+    func testSeedRestoresFutureHorizonsAndIgnoresExpiredOnes() {
+        var policy = BackoffPolicy()
+        policy.seed(providerHorizons: [.anthropic: t0.addingTimeInterval(600), .openai: t0.addingTimeInterval(-1)], now: t0)
+
+        XCTAssertEqual(horizon(policy, a, .anthropic), 600)
+        XCTAssertEqual(horizon(policy, b, .anthropic), 600, "seeded horizon is provider-wide")
+        XCTAssertEqual(policy.rateLimitedUntil(account: a, provider: .anthropic, now: t0), t0.addingTimeInterval(600),
+                       "a seeded horizon shows as rate limited, not as an error")
+        XCTAssertNil(horizon(policy, a, .openai), "the expired horizon was dropped")
+        XCTAssertEqual(policy.providerHorizons(now: t0), [.anthropic: t0.addingTimeInterval(600)])
+    }
+
+    func testSeedNeverShortensAHorizonAlreadyKnown() {
+        var policy = BackoffPolicy()
+        policy.record(outcome: .rateLimited(retryAfter: 900), for: a, provider: .anthropic, now: t0)
+        policy.seed(providerHorizons: [.anthropic: t0.addingTimeInterval(300)], now: t0)
+        XCTAssertEqual(horizon(policy, a, .anthropic), 900)
+
+        policy.seed(providerHorizons: [.anthropic: t0.addingTimeInterval(1_200)], now: t0)
+        XCTAssertEqual(horizon(policy, a, .anthropic), 1_200, "a later horizon extends")
+    }
 }

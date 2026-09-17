@@ -84,6 +84,12 @@ actor PollScheduler {
 
     private(set) var settings: PollSettings
     private var backoff: BackoffPolicy
+    /// Where the provider-wide rate-limit horizon outlives the process. `nil`
+    /// keeps everything in memory.
+    private let backoffPersistence: BackoffPersistence?
+    /// What was last written, so an unchanged horizon is not rewritten on
+    /// every success.
+    private var persistedHorizons: [Provider: Date]?
 
     private var loopTask: Task<Void, Never>?
     private var cycleTask: Task<Void, Never>?
@@ -109,7 +115,8 @@ actor PollScheduler {
         cache: StatusCache,
         settings: PollSettings,
         clock: any PollClock,
-        backoff: BackoffPolicy = BackoffPolicy()
+        backoff: BackoffPolicy = BackoffPolicy(),
+        backoffPersistence: BackoffPersistence? = nil
     ) {
         self.store = store
         self.providers = providers
@@ -118,15 +125,19 @@ actor PollScheduler {
         self.settings = settings
         self.clock = clock
         self.backoff = backoff
+        self.backoffPersistence = backoffPersistence
     }
 
     // MARK: Lifecycle
 
     /// Runs one cycle now and another every `pollInterval`. Calling it while
-    /// running is a no-op.
+    /// running is a no-op. A provider-wide rate-limit horizon saved by the
+    /// previous run is restored first, so the first cycle skips those accounts
+    /// instead of extending the penalty with one more request.
     func start() {
         guard loopTask == nil else { return }
         isPausedForSleep = false
+        seedBackoffFromDisk()
         startLoop()
     }
 
@@ -208,6 +219,28 @@ actor PollScheduler {
         }
         isPausedForSleep = false
         startLoop()
+    }
+
+    // MARK: Persisted backoff (ISC-99 across relaunches)
+
+    private func seedBackoffFromDisk() {
+        guard let backoffPersistence else { return }
+        let now = clock.now()
+        let saved = backoffPersistence.load()
+        backoff.seed(providerHorizons: saved, now: now)
+        for (provider, until) in saved where until > now {
+            logger.notice("Restored \(provider.displayName, privacy: .public) rate-limit horizon until \(until.formatted(.iso8601), privacy: .public)")
+        }
+        persistedHorizons = backoff.providerHorizons(now: now)
+    }
+
+    /// Writes the active provider horizons if they differ from the last write.
+    private func persistBackoffIfChanged() {
+        guard let backoffPersistence else { return }
+        let current = backoff.providerHorizons(now: clock.now())
+        guard current != persistedHorizons else { return }
+        backoffPersistence.save(current)
+        persistedHorizons = current
     }
 
     // MARK: Timer loop
@@ -375,6 +408,7 @@ actor PollScheduler {
                 return try await adapter.fetchStatus(account: account, credential: credential)
             }
             backoff.record(outcome: .success, for: account.id, provider: provider, now: clock.now())
+            persistBackoffIfChanged()
             await cache.recordSuccess(status, at: attemptAt)
         } catch is CancellationError {
             // The cycle deadline or stop() cancelled us. The deadline path
@@ -406,6 +440,7 @@ actor PollScheduler {
         case UsageError.rateLimited(let retryAfter):
             let until = backoff.record(outcome: .rateLimited(retryAfter: retryAfter), for: account.id, provider: provider, now: now)
                 ?? now.addingTimeInterval(BackoffPolicy.rateLimitBase)
+            persistBackoffIfChanged()
             await cache.recordFailure(
                 account: account,
                 state: .rateLimited(until: until),

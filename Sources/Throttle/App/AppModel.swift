@@ -113,7 +113,8 @@ final class AppModel {
             resolver: TokenRefresher(),
             cache: cache,
             settings: pollSettings,
-            clock: clock
+            clock: clock,
+            backoffPersistence: BackoffPersistence(paths: paths)
         )
         self.rotation = RotationController(interval: settings.rotationInterval)
     }

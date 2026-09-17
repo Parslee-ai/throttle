@@ -2,7 +2,7 @@ import Foundation
 
 /// Where Throttle keeps its non-secret files on disk.
 ///
-/// The files are `accounts.json` and `status-cache.json`. Secrets never live under this
+/// The files are `accounts.json`, `status-cache.json`, and `rate-limits.json`. Secrets never live under this
 /// directory; they live in the Keychain (see `KeychainStore`). The base
 /// directory is injectable so tests run against a temporary directory and
 /// never touch the real `~/Library/Application Support/Throttle`.
@@ -20,6 +20,13 @@ struct AppPaths: Sendable, Hashable {
     /// keyed by account id (ISC-90). Never holds a token.
     var statusCacheFile: URL {
         applicationSupportDirectory.appendingPathComponent("status-cache.json", isDirectory: false)
+    }
+
+    /// The provider-wide rate-limit horizons still in force at the last write,
+    /// a JSON object of provider id to ISO-8601 date. Never holds anything
+    /// else (see `BackoffPersistence`).
+    var rateLimitsFile: URL {
+        applicationSupportDirectory.appendingPathComponent("rate-limits.json", isDirectory: false)
     }
 
     init(applicationSupportDirectory: URL) {

@@ -111,6 +111,27 @@ struct BackoffPolicy: Hashable, Sendable {
         }
     }
 
+    // MARK: Persistence (ISC-99 across relaunches)
+
+    /// The provider-wide rate-limit horizons still in the future. These are
+    /// the only horizons worth carrying across a relaunch: per-account error
+    /// backoff is short, and another request after a provider-wide 429 is what
+    /// extends the penalty.
+    func providerHorizons(now: Date) -> [Provider: Date] {
+        providerRateLimitUntil.filter { $0.value > now }
+    }
+
+    /// Restores provider-wide horizons saved by a previous run. Expired ones
+    /// are dropped, and a horizon already known is only ever extended, never
+    /// shortened. The doubling streak is not restored: the next 429 without
+    /// `Retry-After` starts again at the base delay.
+    mutating func seed(providerHorizons: [Provider: Date], now: Date) {
+        for (provider, until) in providerHorizons where until > now {
+            if let existing = providerRateLimitUntil[provider], existing >= until { continue }
+            providerRateLimitUntil[provider] = until
+        }
+    }
+
     // MARK: Schedules
 
     private enum RateLimitScope {
