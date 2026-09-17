@@ -1,0 +1,375 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileReference section */
+		1A00000000000000000000A6 /* Throttle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Throttle.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A00000000000000000000A7 /* ThrottleTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ThrottleTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A00000000000000000000C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		1A00000000000000000000A8 /* Throttle */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/Throttle; sourceTree = "<group>"; };
+		1A00000000000000000000A9 /* ThrottleTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Tests/ThrottleTests; sourceTree = "<group>"; };
+		1A00000000000000000000B0 /* Fixtures */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Tests/Fixtures; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A00000000000000000000B2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A00000000000000000000B5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A00000000000000000000A2 = {
+			isa = PBXGroup;
+			children = (
+				1A00000000000000000000A8 /* Throttle */,
+				1A00000000000000000000A9 /* ThrottleTests */,
+				1A00000000000000000000B0 /* Fixtures */,
+				1A00000000000000000000C9 /* Resources */,
+				1A00000000000000000000A3 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1A00000000000000000000A3 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A00000000000000000000A6 /* Throttle.app */,
+				1A00000000000000000000A7 /* ThrottleTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		1A00000000000000000000C9 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1A00000000000000000000C8 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1A00000000000000000000A4 /* Throttle */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A00000000000000000000B8 /* Build configuration list for PBXNativeTarget "Throttle" */;
+			buildPhases = (
+				1A00000000000000000000B1 /* Sources */,
+				1A00000000000000000000B2 /* Frameworks */,
+				1A00000000000000000000B3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1A00000000000000000000A8 /* Throttle */,
+			);
+			name = Throttle;
+			packageProductDependencies = (
+			);
+			productName = Throttle;
+			productReference = 1A00000000000000000000A6 /* Throttle.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1A00000000000000000000A5 /* ThrottleTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A00000000000000000000B9 /* Build configuration list for PBXNativeTarget "ThrottleTests" */;
+			buildPhases = (
+				1A00000000000000000000B4 /* Sources */,
+				1A00000000000000000000B5 /* Frameworks */,
+				1A00000000000000000000B6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A00000000000000000000C6 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				1A00000000000000000000A9 /* ThrottleTests */,
+				1A00000000000000000000B0 /* Fixtures */,
+			);
+			name = ThrottleTests;
+			packageProductDependencies = (
+			);
+			productName = ThrottleTests;
+			productReference = 1A00000000000000000000A7 /* ThrottleTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1A00000000000000000000A1 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					1A00000000000000000000A4 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					1A00000000000000000000A5 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 1A00000000000000000000A4;
+					};
+				};
+			};
+			buildConfigurationList = 1A00000000000000000000B7 /* Build configuration list for PBXProject "Throttle" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 1A00000000000000000000A2;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 1A00000000000000000000A3 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1A00000000000000000000A4 /* Throttle */,
+				1A00000000000000000000A5 /* ThrottleTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1A00000000000000000000B3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A00000000000000000000B6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1A00000000000000000000B1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A00000000000000000000B4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1A00000000000000000000C6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A00000000000000000000A4 /* Throttle */;
+			targetProxy = 1A00000000000000000000C7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		1A00000000000000000000C7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A00000000000000000000A1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A00000000000000000000A4;
+			remoteInfo = Throttle;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin XCBuildConfiguration section */
+		1A00000000000000000000C0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				LM_SKIP_METADATA_EXTRACTION = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		1A00000000000000000000C1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				LM_SKIP_METADATA_EXTRACTION = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		1A00000000000000000000C2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.parslee.throttle;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		1A00000000000000000000C3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.parslee.throttle;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		1A00000000000000000000C4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.parslee.throttle.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Throttle.app/Contents/MacOS/Throttle";
+			};
+			name = Debug;
+		};
+		1A00000000000000000000C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.parslee.throttle.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Throttle.app/Contents/MacOS/Throttle";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1A00000000000000000000B7 /* Build configuration list for PBXProject "Throttle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A00000000000000000000C0 /* Debug */,
+				1A00000000000000000000C1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A00000000000000000000B8 /* Build configuration list for PBXNativeTarget "Throttle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A00000000000000000000C2 /* Debug */,
+				1A00000000000000000000C3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A00000000000000000000B9 /* Build configuration list for PBXNativeTarget "ThrottleTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A00000000000000000000C4 /* Debug */,
+				1A00000000000000000000C5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 1A00000000000000000000A1 /* Project object */;
+}
