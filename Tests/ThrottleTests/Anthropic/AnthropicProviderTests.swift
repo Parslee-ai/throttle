@@ -31,7 +31,7 @@ final class AnthropicProviderTests: XCTestCase {
 
         XCTAssertEqual(client.requests.count, 1)
         let request = try XCTUnwrap(client.requests.first)
-        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1")
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(AnthropicSampleSecret.accessToken)")
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
