@@ -95,14 +95,32 @@ struct DetailWindow: View {
             List {
                 ForEach(model.accounts) { account in
                     VStack(spacing: 0) {
-                        AccountRow(
-                            account: account,
-                            cached: model.statuses[account.id],
-                            planLabel: model.planLabel(for: account),
-                            showRemaining: model.settings.showRemaining,
-                            now: context.date,
-                            onReLogin: { model.reLogin(account) }
-                        )
+                        HStack(alignment: .top, spacing: 0) {
+                            AccountRow(
+                                account: account,
+                                cached: model.statuses[account.id],
+                                planLabel: model.planLabel(for: account),
+                                showRemaining: model.settings.showRemaining,
+                                now: context.date,
+                                onReLogin: { model.reLogin(account) }
+                            )
+                            // The same actions as the context menu, behind a
+                            // visible button, because right-click is not
+                            // discoverable in a menu bar window.
+                            Menu {
+                                rowMenu(for: account)
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .imageScale(.large)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .padding(.top, 10)
+                            .padding(.trailing, 12)
+                            .accessibilityLabel("Account actions for \(account.email)")
+                        }
                         .contextMenu { rowMenu(for: account) }
                         Divider().padding(.leading, 12)
                     }

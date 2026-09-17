@@ -41,7 +41,9 @@ struct AnthropicProvider: UsageProvider {
             Self.logger.error("Usage rejected with HTTP \(response.statusCode, privacy: .public): \(reason, privacy: .public)")
             throw UsageError.needsLogin
         case 429:
-            throw UsageError.rateLimited(retryAfter: retryAfter(from: response))
+            let retry = retryAfter(from: response)
+            Self.logger.error("Usage rate limited; Retry-After \(retry.map { String(Int($0)) } ?? "absent", privacy: .public)s")
+            throw UsageError.rateLimited(retryAfter: retry)
         case 300...399:
             throw UsageError.redirect
         default:
