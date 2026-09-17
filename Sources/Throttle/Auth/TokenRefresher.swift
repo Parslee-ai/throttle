@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Hands out a credential that is good for at least the next minute,
 /// refreshing it first when it is not (ISC-62/63/64, 83/84).
@@ -40,6 +41,8 @@ actor TokenRefresher {
         let now = self.now
         let task = Task.detached(priority: .userInitiated) {
             guard let stored = try await store.credential(for: account.id) else {
+                Logger(subsystem: "ai.parslee.throttle", category: "TokenRefresher")
+                    .error("No stored credential for account \(account.id.uuidString, privacy: .public)")
                 throw UsageError.needsLogin
             }
             guard Self.needsRefresh(stored, now: now()) else {

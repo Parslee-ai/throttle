@@ -15,7 +15,7 @@ struct AnthropicLogin: OAuthLogin {
     static let manualRedirectURI = "https://platform.claude.com/oauth/code/callback"
     static let loopbackPath = "/callback"
     static let defaultPorts: [UInt16] = [1456, 1458]
-    static let scope = "user:profile"
+    static let scope = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
     static let fallbackEmail = "Claude account"
 
     private let client: HTTPClient
