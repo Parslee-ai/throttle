@@ -9,13 +9,20 @@ struct OpenAIProvider: UsageProvider {
 
     private let client: HTTPClient
     private let now: @Sendable () -> Date
+    /// Receives one line per non-200 response, with the bearer header removed.
+    private let diagnostics: Diagnostics?
 
     /// Usage payloads are a few kilobytes; anything past this is not a payload.
     static let maxUsageBodyBytes = 256 * 1024
 
-    init(client: HTTPClient = URLSessionHTTPClient(), now: @escaping @Sendable () -> Date = Date.init) {
+    init(
+        client: HTTPClient = URLSessionHTTPClient(),
+        now: @escaping @Sendable () -> Date = Date.init,
+        diagnostics: Diagnostics? = nil
+    ) {
         self.client = client
         self.now = now
+        self.diagnostics = diagnostics
     }
 
     func fetchStatus(account: Account, credential: AccountCredential) async throws -> AccountStatus {
@@ -39,6 +46,9 @@ struct OpenAIProvider: UsageProvider {
 
         let response = try await client.send(request, maxBodyBytes: Self.maxUsageBodyBytes)
         let fetchedAt = now()
+        if response.statusCode != 200 {
+            await diagnose(.usage, accountID: account.id, request: request, response: response, at: fetchedAt)
+        }
 
         let snapshot: OpenAIUsageSnapshot
         switch response.statusCode {
@@ -86,6 +96,9 @@ struct OpenAIProvider: UsageProvider {
         request.httpBody = Data(Self.refreshFormBody(refreshToken: refreshToken).utf8)
 
         let response = try await client.send(request, maxBodyBytes: Self.maxUsageBodyBytes)
+        if response.statusCode != 200 {
+            await diagnose(.refresh, accountID: nil, request: request, response: response, at: now())
+        }
 
         switch response.statusCode {
         case 200:
@@ -135,6 +148,27 @@ struct OpenAIProvider: UsageProvider {
     }
 
     // MARK: - Helpers
+
+    /// One diagnostics line for a non-200 exchange. `DiagnosticEvent` drops
+    /// the bearer header and redacts the body before anything is written.
+    private func diagnose(
+        _ kind: DiagnosticEvent.Kind,
+        accountID: UUID?,
+        request: URLRequest,
+        response: HTTPResponse,
+        at: Date
+    ) async {
+        guard let diagnostics else { return }
+        await diagnostics.record(DiagnosticEvent(
+            ts: at,
+            provider: .openai,
+            accountID: accountID,
+            kind: kind,
+            request: request,
+            response: response,
+            retryAfter: Self.retryAfter(from: response)
+        ))
+    }
 
     /// The exact form body sent to the token endpoint on refresh.
     static func refreshFormBody(refreshToken: String) -> String {

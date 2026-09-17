@@ -111,6 +111,20 @@ struct BackoffPolicy: Hashable, Sendable {
         }
     }
 
+    /// Drops the provider-wide rate-limit horizon and its doubling streak,
+    /// plus the per-account rate-limit horizons of the given accounts (the
+    /// scope OpenAI uses). The user's "retry now" override: the next cycle
+    /// fetches these accounts whatever `Retry-After` said. Error backoff is
+    /// left alone; it is short and not what the override is for.
+    mutating func clearHorizon(provider: Provider, accounts: [UUID] = []) {
+        providerRateLimitUntil[provider] = nil
+        providerRateLimitStreak[provider] = nil
+        for account in accounts {
+            accountRateLimitUntil[account] = nil
+            accountRateLimitStreak[account] = nil
+        }
+    }
+
     // MARK: Persistence (ISC-99 across relaunches)
 
     /// The provider-wide rate-limit horizons still in the future. These are

@@ -164,6 +164,9 @@ struct DetailWindow: View {
     @ViewBuilder
     private func rowMenu(for account: Account) -> some View {
         Button("Refresh") { model.refresh(account) }
+        if case .rateLimited = model.statuses[account.id]?.status.state {
+            Button("Retry status check now") { model.retryProvider(for: account) }
+        }
         Divider()
         Button("Move up") { model.moveUp(account) }
             .disabled(model.accounts.first?.id == account.id)

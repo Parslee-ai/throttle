@@ -61,6 +61,8 @@ struct SettingsView: View {
             }
 
             HStack {
+                Button("Reveal diagnostics log") { model.revealDiagnosticsLog() }
+                    .help("Shows the on-disk record of provider responses. It never contains a token.")
                 Spacer()
                 Button("Done", action: onDismiss)
                     .keyboardShortcut(.defaultAction)

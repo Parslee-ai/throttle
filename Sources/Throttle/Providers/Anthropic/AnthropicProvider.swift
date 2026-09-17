@@ -11,10 +11,17 @@ struct AnthropicProvider: UsageProvider {
 
     private let client: HTTPClient
     private let now: @Sendable () -> Date
+    /// Receives one line per non-200 response, with the bearer header removed.
+    private let diagnostics: Diagnostics?
 
-    init(client: HTTPClient = URLSessionHTTPClient(), now: @escaping @Sendable () -> Date = Date.init) {
+    init(
+        client: HTTPClient = URLSessionHTTPClient(),
+        now: @escaping @Sendable () -> Date = Date.init,
+        diagnostics: Diagnostics? = nil
+    ) {
         self.client = client
         self.now = now
+        self.diagnostics = diagnostics
     }
 
     // MARK: - Usage
@@ -22,6 +29,9 @@ struct AnthropicProvider: UsageProvider {
     func fetchStatus(account: Account, credential: AccountCredential) async throws -> AccountStatus {
         let request = authorizedRequest(url: AnthropicEndpoints.usage, accessToken: credential.accessToken)
         let response = try await send(request)
+        if response.statusCode != 200 {
+            await diagnose(.usage, accountID: account.id, request: request, response: response, retryAfter: retryAfter(from: response))
+        }
 
         switch response.statusCode {
         case 200:
@@ -61,6 +71,9 @@ struct AnthropicProvider: UsageProvider {
     func fetchProfile(credential: AccountCredential) async throws -> (email: String?, organizationName: String?) {
         let request = authorizedRequest(url: AnthropicEndpoints.profile, accessToken: credential.accessToken)
         let response = try await send(request)
+        if response.statusCode != 200 {
+            await diagnose(.profile, accountID: nil, request: request, response: response)
+        }
         guard response.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: response.body),
               let root = json as? [String: Any] else {
@@ -93,12 +106,20 @@ struct AnthropicProvider: UsageProvider {
             throw UsageError.needsLogin
         }
 
-        var response = try await send(jsonTokenRequest(refreshToken: refreshToken))
+        var request = jsonTokenRequest(refreshToken: refreshToken)
+        var response = try await send(request)
+        if response.statusCode != 200 {
+            await diagnose(.refresh, accountID: nil, request: request, response: response)
+        }
         if isInvalidGrant(response) {
             throw UsageError.needsLogin
         }
         if response.statusCode == 400 {
-            response = try await send(formTokenRequest(refreshToken: refreshToken))
+            request = formTokenRequest(refreshToken: refreshToken)
+            response = try await send(request)
+            if response.statusCode != 200 {
+                await diagnose(.refresh, accountID: nil, request: request, response: response, message: "form-encoded fallback")
+            }
             if isInvalidGrant(response) {
                 throw UsageError.needsLogin
             }
@@ -218,6 +239,29 @@ struct AnthropicProvider: UsageProvider {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
         return request
+    }
+
+    /// One diagnostics line for a non-200 exchange. `DiagnosticEvent` drops
+    /// the bearer header and redacts the body before anything is written.
+    private func diagnose(
+        _ kind: DiagnosticEvent.Kind,
+        accountID: UUID?,
+        request: URLRequest,
+        response: HTTPResponse,
+        retryAfter: TimeInterval? = nil,
+        message: String? = nil
+    ) async {
+        guard let diagnostics else { return }
+        await diagnostics.record(DiagnosticEvent(
+            ts: now(),
+            provider: .anthropic,
+            accountID: accountID,
+            kind: kind,
+            request: request,
+            response: response,
+            retryAfter: retryAfter,
+            message: message
+        ))
     }
 
     /// Sends through the client and rewraps transport failures so that

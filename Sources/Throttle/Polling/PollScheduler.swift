@@ -90,6 +90,8 @@ actor PollScheduler {
     /// What was last written, so an unchanged horizon is not rewritten on
     /// every success.
     private var persistedHorizons: [Provider: Date]?
+    /// The on-disk diagnostics log, if the app wired one.
+    private let diagnostics: Diagnostics?
 
     private var loopTask: Task<Void, Never>?
     private var cycleTask: Task<Void, Never>?
@@ -116,7 +118,8 @@ actor PollScheduler {
         settings: PollSettings,
         clock: any PollClock,
         backoff: BackoffPolicy = BackoffPolicy(),
-        backoffPersistence: BackoffPersistence? = nil
+        backoffPersistence: BackoffPersistence? = nil,
+        diagnostics: Diagnostics? = nil
     ) {
         self.store = store
         self.providers = providers
@@ -126,6 +129,7 @@ actor PollScheduler {
         self.clock = clock
         self.backoff = backoff
         self.backoffPersistence = backoffPersistence
+        self.diagnostics = diagnostics
     }
 
     // MARK: Lifecycle
@@ -180,6 +184,26 @@ actor PollScheduler {
             return
         }
         launchCycle(trigger: .refreshNow)
+    }
+
+    /// The user's override for a provider throttle: forgets the provider's
+    /// rate-limit horizon (and the per-account horizons of its accounts),
+    /// writes the cleared state to disk so a relaunch does not restore it,
+    /// and runs one cycle now. The provider may answer 429 again, in which
+    /// case a fresh horizon is armed from its `Retry-After`.
+    func retryProvider(_ provider: Provider) async {
+        let accounts = await store.accounts().filter { $0.provider == provider }.map(\.id)
+        backoff.clearHorizon(provider: provider, accounts: accounts)
+        persistBackoffIfChanged()
+        logger.notice("Retry-now override cleared the \(provider.displayName, privacy: .public) rate-limit horizon")
+        await diagnostics?.record(DiagnosticEvent(
+            ts: clock.now(),
+            provider: provider,
+            accountID: nil,
+            kind: .scheduler,
+            message: "Retry-now override cleared the rate-limit horizon for \(accounts.count) account(s)"
+        ))
+        refreshNow()
     }
 
     // MARK: Sleep and wake (ISC-102)
@@ -410,6 +434,13 @@ actor PollScheduler {
             backoff.record(outcome: .success, for: account.id, provider: provider, now: clock.now())
             persistBackoffIfChanged()
             await cache.recordSuccess(status, at: attemptAt)
+            await diagnostics?.record(DiagnosticEvent(
+                ts: clock.now(),
+                provider: provider,
+                accountID: account.id,
+                kind: .usage,
+                status: 200
+            ))
         } catch is CancellationError {
             // The cycle deadline or stop() cancelled us. The deadline path
             // marks the account stale; stop() wants nothing recorded.
@@ -436,6 +467,7 @@ actor PollScheduler {
                 at: attemptAt,
                 markStale: true
             )
+            await diagnose(account, provider: provider, at: now, message: "Marked needs-login")
 
         case UsageError.rateLimited(let retryAfter):
             let until = backoff.record(outcome: .rateLimited(retryAfter: retryAfter), for: account.id, provider: provider, now: now)
@@ -448,6 +480,13 @@ actor PollScheduler {
                 at: attemptAt,
                 markStale: false,
                 nextAttemptAt: until
+            )
+            await diagnose(
+                account,
+                provider: provider,
+                at: now,
+                retryAfterSeconds: retryAfter.map { Int($0.rounded()) },
+                message: "Rate limited; skipping until \(until.formatted(.iso8601))"
             )
 
         default:
@@ -464,7 +503,33 @@ actor PollScheduler {
                 markStale: true,
                 nextAttemptAt: until
             )
+            await diagnose(
+                account,
+                provider: provider,
+                at: now,
+                message: "\(message); backing off until \(until.map { $0.formatted(.iso8601) } ?? "next cycle")"
+            )
         }
+    }
+
+    /// One `scheduler` line in the diagnostics log for a failed attempt. The
+    /// provider already logged the HTTP exchange itself; this records how the
+    /// scheduler classified it.
+    private func diagnose(
+        _ account: Account,
+        provider: Provider,
+        at: Date,
+        retryAfterSeconds: Int? = nil,
+        message: String
+    ) async {
+        await diagnostics?.record(DiagnosticEvent(
+            ts: at,
+            provider: provider,
+            accountID: account.id,
+            kind: .scheduler,
+            retryAfterSeconds: retryAfterSeconds,
+            message: message
+        ))
     }
 
     private static func message(for error: Error) -> String {
