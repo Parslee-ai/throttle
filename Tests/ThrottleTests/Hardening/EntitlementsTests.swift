@@ -13,6 +13,7 @@ final class EntitlementsTests: XCTestCase {
     private let expectedKey = "com.apple.security.network.client"
 
     func testEntitlementsContainOnlyTheNetworkClientKey() throws {
+        try RepoAudit.requireRepositoryAccess()
         let url = RepoAudit.entitlementsFile
         let data = try Data(contentsOf: url)
         let parsed = try PropertyListSerialization.propertyList(from: data, format: nil)
@@ -36,6 +37,7 @@ final class EntitlementsTests: XCTestCase {
     }
 
     func testProjectEnablesHardenedRuntimeAndPointsAtTheEntitlements() throws {
+        try RepoAudit.requireRepositoryAccess()
         let project = RepoAudit.root
             .appendingPathComponent("Throttle.xcodeproj")
             .appendingPathComponent("project.pbxproj")

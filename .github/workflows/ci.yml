@@ -22,4 +22,8 @@ jobs:
         run: scripts/build.sh
 
       - name: Test
+        env:
+          # The source-audit tests read the checkout; on a runner there is no
+          # privacy prompt, so run them. Locally they skip under ~/Documents.
+          TEST_RUNNER_THROTTLE_REPO_AUDIT: "1"
         run: scripts/test.sh

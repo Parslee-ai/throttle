@@ -1,4 +1,5 @@
 import Foundation
+import XCTest
 
 /// Shared machinery for the source-audit tests (ISC-132–137, 56, 67, 77, 87).
 ///
@@ -8,6 +9,29 @@ import Foundation
 /// the only entitlement is network client. The repository root is derived from
 /// `#filePath` so the audit works from any derived-data location.
 enum RepoAudit {
+    /// Reading the checkout from the host app trips a Files-and-Folders
+    /// privacy prompt when the repository lives under a protected folder such
+    /// as `~/Documents`; a headless run cannot answer it and hangs. The audit
+    /// runs when the checkout is outside those folders (CI) or when the runner
+    /// opts in with `THROTTLE_REPO_AUDIT=1` (`TEST_RUNNER_THROTTLE_REPO_AUDIT=1`
+    /// through xcodebuild) after granting the host app access once.
+    static var canReadRepository: Bool {
+        if ProcessInfo.processInfo.environment["THROTTLE_REPO_AUDIT"] == "1" { return true }
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let path = root.standardizedFileURL.path
+        for folder in ["Documents", "Desktop", "Downloads"] where path.hasPrefix(home + "/" + folder + "/") {
+            return false
+        }
+        return true
+    }
+
+    /// Throws `XCTSkip` when the checkout cannot be read without a prompt.
+    static func requireRepositoryAccess() throws {
+        guard canReadRepository else {
+            throw XCTSkip("repository audit skipped: checkout is under a privacy-protected folder; set TEST_RUNNER_THROTTLE_REPO_AUDIT=1 to run it")
+        }
+    }
+
     /// `<repo>/Tests/ThrottleTests/Hardening/RepoAudit.swift` -> `<repo>`.
     static let root: URL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent() // Hardening
@@ -42,6 +66,7 @@ enum RepoAudit {
 
     /// Every `.swift` file under `Sources/`, sorted for stable failure output.
     static func swiftFiles() throws -> [URL] {
+        try requireRepositoryAccess()
         let enumerator = FileManager.default.enumerator(
             at: sourcesRoot,
             includingPropertiesForKeys: [.isRegularFileKey]
@@ -66,6 +91,7 @@ enum RepoAudit {
     }
 
     static func lines(in file: URL) throws -> [SourceLine] {
+        try requireRepositoryAccess()
         let relative = relativePath(of: file)
         let contents = try String(contentsOf: file, encoding: .utf8)
         return contents

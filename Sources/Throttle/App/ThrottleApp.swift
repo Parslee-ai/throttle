@@ -10,8 +10,20 @@ struct ThrottleApp: App {
 
     init() {
         let model = AppModel()
-        model.start()
+        // The unit-test bundle runs inside this app as its host. Starting the
+        // real engine there polls the user's real accounts from an ad-hoc
+        // signed build, which cannot read the notarized build's Keychain items
+        // without a blocking prompt, and the whole suite hangs on it.
+        if !Self.isRunningTests {
+            model.start()
+        }
         _model = State(initialValue: model)
+    }
+
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     var body: some Scene {
