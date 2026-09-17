@@ -189,7 +189,8 @@ enum CredentialImport {
             refreshToken: tokens["refresh_token"] as? String,
             expiresAt: accessClaims?.exp,
             accountID: accountID,
-            scopes: OpenAIEndpoints.scopes
+            scopes: OpenAIEndpoints.scopes,
+            idToken: tokens["id_token"] as? String
         )
         var label = idClaims?.email ?? accessClaims?.email ?? "Codex CLI login"
         if let plan = idClaims?.chatgptPlanType ?? accessClaims?.chatgptPlanType, !plan.isEmpty {

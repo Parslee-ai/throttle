@@ -22,6 +22,19 @@ final class StatusCacheTests: XCTestCase {
         )
     }
 
+    func testPlanLabelSurvivesAFailedAttempt() async {
+        let now = clock.now()
+        let withPlan = AccountStatus(
+            accountID: account.id, provider: .anthropic, email: account.email,
+            windows: [UsageWindow(key: "5h", label: "5h", usedPercent: 1, resetsAt: nil, durationSeconds: 18_000)],
+            fetchedAt: now, state: .ok, planLabel: "max"
+        )
+        await cache.recordSuccess(withPlan, at: now)
+        await cache.recordFailure(account: account, state: .error("boom"), error: "boom", at: now.addingTimeInterval(1), markStale: true)
+        let entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.planLabel, "max")
+    }
+
     func testSuccessIsCurrent() async {
         let now = clock.now()
         await cache.recordSuccess(status(percent: 40, at: now), at: now)

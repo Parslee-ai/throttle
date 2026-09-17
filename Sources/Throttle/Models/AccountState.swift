@@ -4,7 +4,7 @@ import Foundation
 ///
 /// An account never disappears because of a bad fetch: it changes state and
 /// keeps its row, so the user can see what went wrong and fix it.
-enum AccountState: Hashable, Sendable {
+enum AccountState: Codable, Hashable, Sendable {
     /// Last fetch succeeded and the windows are current.
     case ok
     /// Auth is gone or was rejected; the row offers a re-login.

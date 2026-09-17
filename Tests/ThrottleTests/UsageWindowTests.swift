@@ -2,6 +2,14 @@ import XCTest
 @testable import Throttle
 
 final class UsageWindowTests: XCTestCase {
+    func testLaneKeysAreRecognisedByPrefix() {
+        let lane = UsageWindow(key: "lane:spark-5h", label: "Spark 5h", usedPercent: 1, resetsAt: nil, durationSeconds: 18_000)
+        let primary = UsageWindow(key: "5h", label: "5h", usedPercent: 1, resetsAt: nil, durationSeconds: 18_000)
+        XCTAssertEqual(UsageWindow.lanePrefix, "lane:")
+        XCTAssertTrue(lane.isLane)
+        XCTAssertFalse(primary.isLane)
+    }
+
     /// ISC-71 / D-8: lane labels are derived from the reported window length,
     /// never from a hardcoded lane name, because providers have switched lanes
     /// off mid-month.

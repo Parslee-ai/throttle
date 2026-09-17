@@ -2,7 +2,7 @@ import Foundation
 
 /// One account's most recent known status plus what the scheduler learned on
 /// its last attempt. This is what the UI reads; the UI never sees a provider.
-struct CachedStatus: Hashable, Sendable {
+struct CachedStatus: Codable, Hashable, Sendable {
     /// The status to draw. After a failed attempt this still carries the last
     /// good windows and their `fetchedAt`, with `state` describing the failure,
     /// so the row dims rather than blanks (ISC-97).
@@ -70,6 +70,23 @@ actor StatusCache {
         return stream
     }
 
+    // MARK: Seeding (launch only)
+
+    /// Installs entries persisted by a previous run (ISC-90), so the rows show
+    /// their last known numbers before the first fetch completes. Only accounts
+    /// with no live entry are seeded; a seeded entry is dimmed by the age rule
+    /// like any other and is replaced by the first attempt of this run.
+    func seed(from persisted: [UUID: CachedStatus]) {
+        var changed = false
+        for (id, entry) in persisted where entries[id] == nil {
+            var seeded = entry
+            seeded.nextAttemptAt = nil
+            entries[id] = seeded
+            changed = true
+        }
+        if changed { publish() }
+    }
+
     // MARK: Writing (scheduler only)
 
     /// A successful fetch. The entry becomes current and its last good windows
@@ -106,7 +123,8 @@ actor StatusCache {
             email: account.email,
             windows: windows,
             fetchedAt: previous?.status.fetchedAt ?? attempt,
-            state: state
+            state: state,
+            planLabel: previous?.status.planLabel
         )
         entries[account.id] = CachedStatus(
             status: status,
@@ -183,7 +201,8 @@ actor StatusCache {
             email: status.email,
             windows: status.windows,
             fetchedAt: status.fetchedAt,
-            state: state
+            state: state,
+            planLabel: status.planLabel
         )
     }
 }

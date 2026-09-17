@@ -15,6 +15,14 @@ struct UsageWindow: Codable, Hashable, Sendable {
     /// Length of the window in seconds, as reported by the provider.
     let durationSeconds: Int
 
+    /// Keys with this prefix are secondary, per-model lanes (ISC-73). The
+    /// detail window shows them collapsed after the primary windows; the menu
+    /// bar never shows them.
+    static let lanePrefix = "lane:"
+
+    /// True for a secondary lane window.
+    var isLane: Bool { key.hasPrefix(Self.lanePrefix) }
+
     init(
         key: String,
         label: String,

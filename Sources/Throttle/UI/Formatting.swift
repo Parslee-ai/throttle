@@ -164,7 +164,10 @@ enum Formatting {
             break
         }
 
-        let windows = cached.status.windows.isEmpty ? (cached.lastGoodWindows ?? []) : cached.status.windows
+        // Secondary lanes stay in the detail window (ISC-73); the bar shows
+        // only the primary windows.
+        let allWindows = cached.status.windows.isEmpty ? (cached.lastGoodWindows ?? []) : cached.status.windows
+        let windows = allWindows.filter { !$0.isLane }
         let dimmed = cached.isStale
         if windows.isEmpty {
             let marker: String

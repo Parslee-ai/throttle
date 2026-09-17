@@ -67,7 +67,8 @@ struct OpenAIProvider: UsageProvider {
             email: snapshot.email ?? account.email,
             windows: snapshot.windows + snapshot.additionalWindows,
             fetchedAt: fetchedAt,
-            state: .ok
+            state: .ok,
+            planLabel: snapshot.planType.flatMap { $0.isEmpty ? nil : $0 }
         )
         return (status, snapshot)
     }
@@ -127,7 +128,9 @@ struct OpenAIProvider: UsageProvider {
             refreshToken: token.refreshToken ?? credential.refreshToken,
             expiresAt: expiresAt,
             accountID: idClaims?.chatgptAccountID ?? accessClaims?.chatgptAccountID ?? credential.accountID,
-            scopes: credential.scopes.isEmpty ? OpenAIEndpoints.scopes : credential.scopes
+            scopes: credential.scopes.isEmpty ? OpenAIEndpoints.scopes : credential.scopes,
+            refreshTokenExpiresAt: credential.refreshTokenExpiresAt,
+            idToken: token.idToken ?? credential.idToken
         )
     }
 

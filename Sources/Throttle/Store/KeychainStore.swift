@@ -37,6 +37,10 @@ private struct StoredCredential: Codable {
     var expiresAt: Date?
     var accountID: String?
     var scopes: [String]
+    /// Optional fields decode as absent when an older blob lacks them, so a
+    /// credential written before they existed still loads.
+    var refreshTokenExpiresAt: Date?
+    var idToken: String?
 
     init(_ credential: AccountCredential) {
         accessToken = credential.accessToken
@@ -44,6 +48,8 @@ private struct StoredCredential: Codable {
         expiresAt = credential.expiresAt
         accountID = credential.accountID
         scopes = credential.scopes
+        refreshTokenExpiresAt = credential.refreshTokenExpiresAt
+        idToken = credential.idToken
     }
 
     var credential: AccountCredential {
@@ -52,7 +58,9 @@ private struct StoredCredential: Codable {
             refreshToken: refreshToken,
             expiresAt: expiresAt,
             accountID: accountID,
-            scopes: scopes
+            scopes: scopes,
+            refreshTokenExpiresAt: refreshTokenExpiresAt,
+            idToken: idToken
         )
     }
 }
@@ -105,6 +113,18 @@ final class KeychainStore: CredentialStore {
         return decoder
     }()
 
+    /// The exact bytes `save` writes for a credential. Exposed so tests can
+    /// assert the blob shape without touching the Keychain.
+    static func encodeBlob(_ credential: AccountCredential) throws -> Data {
+        try encoder.encode(StoredCredential(credential))
+    }
+
+    /// The inverse of `encodeBlob`, tolerant of blobs written by older builds
+    /// that lack the newer optional keys.
+    static func decodeBlob(_ data: Data) throws -> AccountCredential {
+        try decoder.decode(StoredCredential.self, from: data).credential
+    }
+
     private func baseQuery(for accountID: UUID) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -117,7 +137,7 @@ final class KeychainStore: CredentialStore {
 
     /// Upsert: update the existing item, and add it when there is none.
     func save(_ credential: AccountCredential, for accountID: UUID) throws {
-        let data = try Self.encoder.encode(StoredCredential(credential))
+        let data = try Self.encodeBlob(credential)
         let query = baseQuery(for: accountID)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -149,7 +169,7 @@ final class KeychainStore: CredentialStore {
         switch status {
         case errSecSuccess:
             guard let data = result as? Data else { throw KeychainError(status: errSecDecode) }
-            return try Self.decoder.decode(StoredCredential.self, from: data).credential
+            return try Self.decodeBlob(data)
         case errSecItemNotFound:
             return nil
         default:

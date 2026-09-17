@@ -65,6 +65,17 @@ final class OpenAIProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.label), ["Weekly", "GPT-5.3-Codex-Spark 5h", "GPT-5.3-Codex-Spark Weekly"], "primary windows first, then extra lanes so the UI can fold them")
         XCTAssertEqual(snapshot.planType, "pro")
         XCTAssertEqual(snapshot.additionalWindows.count, 2)
+        XCTAssertEqual(status.planLabel, "pro", "ISC-74: the plan badge rides on the status")
+        XCTAssertEqual(status.windows.filter(\.isLane).count, 2, "extra lanes carry the lane prefix so the bar can skip them")
+    }
+
+    func testStatusPlanLabelIsNilWhenPayloadHasNoPlan() async throws {
+        let json = """
+        {"rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": 5}, "secondary_window": null}}
+        """
+        let provider = makeProvider(OpenAIMockHTTPClient(responses: [.json(json)]))
+        let status = try await provider.fetchStatus(account: OpenAIFixtures.account, credential: credential)
+        XCTAssertNil(status.planLabel)
     }
 
     func testMissingPayloadEmailFallsBackToAccountEmail() async throws {
@@ -190,6 +201,7 @@ final class OpenAIProviderTests: XCTestCase {
         XCTAssertEqual(rotated.refreshToken, "new-refresh")
         XCTAssertEqual(rotated.accountID, "acct-from-id-token")
         XCTAssertEqual(rotated.expiresAt, fixedNow.addingTimeInterval(3600))
+        XCTAssertEqual(rotated.idToken, idToken, "ISC-81: the id_token is stored with the credential")
     }
 
     func testRefreshKeepsOldRefreshTokenAndAccountIDWhenOmitted() async throws {

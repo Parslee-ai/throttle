@@ -207,6 +207,13 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(sent?["client_id"], "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
     }
 
+    func testRefreshStoresRefreshTokenExpiryWhenPresent() async throws {
+        let body = #"{"access_token":"\#(AnthropicSampleSecret.rotatedAccess)","expires_in":3600,"refresh_token_expires_in":2592000}"#
+        let client = AnthropicMockHTTPClient(status: 200, body: Data(body.utf8))
+        let rotated = try await makeProvider(client).refresh(credential: credential)
+        XCTAssertEqual(rotated.refreshTokenExpiresAt, fixedNow.addingTimeInterval(2_592_000), "ISC-61")
+    }
+
     func testRefreshKeepsOldRefreshTokenAndScopesWhenOmitted() async throws {
         let body = #"{"access_token":"\#(AnthropicSampleSecret.rotatedAccess)","expires_in":3600}"#
         let client = AnthropicMockHTTPClient(status: 200, body: Data(body.utf8))

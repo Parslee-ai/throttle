@@ -27,6 +27,16 @@ final class AnthropicLoginTests: XCTestCase {
         }
     }
 
+    // MARK: Token mapping (ISC-61)
+
+    func testCredentialStoresRefreshTokenExpiry() throws {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(Self.tokenBody.utf8)) as? [String: Any])
+        let credential = try AnthropicLogin.credential(from: object, now: fixedNow)
+        XCTAssertEqual(credential.expiresAt, fixedNow.addingTimeInterval(28_800))
+        XCTAssertEqual(credential.refreshTokenExpiresAt, fixedNow.addingTimeInterval(2_592_000))
+        XCTAssertNil(credential.idToken)
+    }
+
     // MARK: Authorize URL
 
     func testManualModeAuthorizeURLHasExactParameters() async throws {

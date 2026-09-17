@@ -81,6 +81,21 @@ final class FormattingTests: XCTestCase {
         XCTAssertLessThanOrEqual(label.plainText.count, Formatting.barCharacterBudget)
     }
 
+    /// ISC-73: per-model lanes stay in the detail window; the bar shows only
+    /// the primary windows.
+    func testBarLabelOmitsLaneWindows() {
+        let account = UIFixtures.account("me@example.com", provider: .openai)
+        let cached = UIFixtures.cached(for: account, windows: [
+            UIFixtures.window("5h", label: "5h", used: 20),
+            UIFixtures.window("7d", label: "Weekly", used: 30),
+            UIFixtures.window("lane:spark-5h", label: "Spark 5h", used: 99),
+            UIFixtures.window("lane:spark-7d", label: "Spark Weekly", used: 98),
+        ])
+        let label = Formatting.barLabel(account: account, cached: cached, showRemaining: false, now: now)
+        XCTAssertEqual(label.segments.map(\.text), ["5h 20%", "Weekly 30%"])
+        XCTAssertFalse(label.plainText.contains("Spark"))
+    }
+
     func testBarLabelShowsRemainingWhenAsked() {
         let account = UIFixtures.account("me@example.com")
         let cached = UIFixtures.cached(for: account, windows: [UIFixtures.window("5h", label: "5h", used: 42)])
