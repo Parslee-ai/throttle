@@ -156,6 +156,29 @@ final class PollSchedulerTests: XCTestCase {
         XCTAssertEqual(f.anthropic.fetchCount, 2)
     }
 
+    /// ISC-97: a fetch that ignores cancellation cannot hold the cycle open. The
+    /// mock keeps running on wall time for 5 s; the cycle must settle as soon
+    /// as the clock passes the 15 s per-account timeout, well inside that.
+    func testUncooperativeFetchIsAbandonedOnTheTimeout() async throws {
+        let f = makeFixture(PollSettings(pollInterval: 300, perAccountTimeout: 15, cycleDeadline: 60))
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.setBehavior(.ignoreCancellation(seconds: 5), for: account)
+        let t0 = f.startTime
+        let wallStart = Date()
+
+        await f.scheduler.start()
+        await waitUntil("fetch started") { f.anthropic.fetchCount == 1 }
+        await f.clock.advance(by: 15)
+        await f.waitForCycles(1)
+
+        XCTAssertLessThan(Date().timeIntervalSince(wallStart), 4, "the cycle completed without waiting for the stuck fetch")
+        let entry = try await f.requireEntry(account)
+        XCTAssertEqual(entry.status.state, .error("Timed out after 15 s"))
+        XCTAssertTrue(entry.isStale)
+        XCTAssertEqual(entry.lastAttempt, t0)
+        XCTAssertNil(entry.lastGoodWindows, "the late result from the abandoned fetch is discarded, not recorded")
+    }
+
     func testCycleDeadlineMarksUnfetchedAccountsStaleWithoutRequests() async throws {
         let f = makeFixture(PollSettings(pollInterval: 300, perAccountTimeout: 15, cycleDeadline: 40))
         var accounts: [Account] = []
