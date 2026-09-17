@@ -65,7 +65,7 @@ struct OpenAIProvider: UsageProvider {
             accountID: account.id,
             provider: .openai,
             email: snapshot.email ?? account.email,
-            windows: snapshot.windows,
+            windows: snapshot.windows + snapshot.additionalWindows,
             fetchedAt: fetchedAt,
             state: .ok
         )
