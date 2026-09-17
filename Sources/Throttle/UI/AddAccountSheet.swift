@@ -1,30 +1,29 @@
 import SwiftUI
 
-/// The `Add account` menu (ISC-123). Each provider offers the browser login
-/// and, where the source can exist, an import from the matching CLI login.
+/// The `Add account` menu (ISC-123). One submenu per `Provider` case, built
+/// by iterating `allCases` (ISC-41): the browser login, the paste-the-code
+/// login where the provider supports it, and an import from the matching CLI
+/// login where its source can exist.
 ///
-/// The Claude Code import reads another app's Keychain item, which macOS may
-/// gate behind a prompt, so it runs only when the user picks it (ISC-137);
-/// the option is always listed and the picker says when nothing was found.
-/// The Codex option appears only when its `auth.json` exists, which is a
-/// file-existence check that reads nothing.
+/// An import reads another tool's login only when the user picks it
+/// (ISC-137); the picker says when nothing was found. Whether the option is
+/// listed is at most a file-existence check, decided by the provider registry.
 struct AddAccountMenu: View {
     let model: AppModel
     @Binding var importPicker: ImportPicker?
 
     var body: some View {
         Menu {
-            Menu("Claude") {
-                Button("Log in with browser") { model.addAccount(provider: .anthropic, mode: .loopback) }
-                Button("Paste code instead…") { model.addAccount(provider: .anthropic, mode: .manualCode) }
-                Divider()
-                Button("Import from Claude Code…") { present(.anthropic) }
-            }
-            Menu("Codex") {
-                Button("Log in with browser") { model.addAccount(provider: .openai, mode: .loopback) }
-                if model.codexLoginFileExists {
-                    Divider()
-                    Button("Import from Codex CLI…") { present(.openai) }
+            ForEach(Provider.allCases, id: \.self) { provider in
+                Menu(provider.displayName) {
+                    Button("Log in with browser") { model.addAccount(provider: provider, mode: .loopback) }
+                    if let title = provider.manualCodeMenuTitle {
+                        Button(title) { model.addAccount(provider: provider, mode: .manualCode) }
+                    }
+                    if let source = provider.importSourceName, model.importSourceExists(for: provider) {
+                        Divider()
+                        Button("Import from \(source)…") { present(provider) }
+                    }
                 }
             }
         } label: {
@@ -46,10 +45,7 @@ struct ImportPicker: Identifiable {
     let candidates: [ImportCandidate]
 
     var sourceName: String {
-        switch provider {
-        case .anthropic: return "Claude Code"
-        case .openai: return "Codex CLI"
-        }
+        provider.importSourceName ?? provider.displayName
     }
 }
 

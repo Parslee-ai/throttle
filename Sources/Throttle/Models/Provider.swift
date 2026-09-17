@@ -23,4 +23,28 @@ enum Provider: String, Codable, CaseIterable, Sendable {
         case .openai: return "chevron.left.forwardslash.chevron.right"
         }
     }
+
+    /// Whether the provider's hosted login page can show the code for the user
+    /// to paste, as a fallback to the loopback redirect (ISC-59).
+    var supportsManualCode: Bool {
+        switch self {
+        case .anthropic: return true
+        case .openai: return false
+        }
+    }
+
+    /// The "Add account" menu item for the paste-the-code login, or `nil` when
+    /// the provider has no such mode.
+    var manualCodeMenuTitle: String? {
+        supportsManualCode ? "Paste code instead…" : nil
+    }
+
+    /// The name of the CLI tool whose login Throttle can import for this
+    /// provider, or `nil` when there is none.
+    var importSourceName: String? {
+        switch self {
+        case .anthropic: return "Claude Code"
+        case .openai: return "Codex CLI"
+        }
+    }
 }

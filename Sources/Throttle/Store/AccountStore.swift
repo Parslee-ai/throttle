@@ -271,7 +271,7 @@ actor AccountStore {
     /// a crash mid-write leaves the previous file intact (ISC-88). Mode 0600 is
     /// set on the temp file before the rename and re-applied to the final path
     /// afterwards (ISC-94).
-    private static func atomicWrite(_ data: Data, to url: URL) throws {
+    static func atomicWrite(_ data: Data, to url: URL) throws {
         let tmp = url.appendingPathExtension("tmp")
         let fm = FileManager.default
         guard fm.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {

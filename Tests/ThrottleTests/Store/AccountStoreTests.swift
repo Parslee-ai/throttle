@@ -33,6 +33,27 @@ final class AccountStoreTests: XCTestCase {
         return info.st_mode & 0o777
     }
 
+    // MARK: Drag reorder (ISC-92)
+
+    func testMoveToIndexReordersAndPersists() async throws {
+        let store = makeStore()
+        let a = try await store.add(provider: .anthropic, email: "a@example.com", credential: credential("a"))
+        let b = try await store.add(provider: .anthropic, email: "b@example.com", credential: credential("b"))
+        let c = try await store.add(provider: .openai, email: "c@example.com", credential: credential("c"))
+
+        try await store.move(id: a.id, to: 2)
+        var order = await store.accounts().map(\.id)
+        XCTAssertEqual(order, [b.id, c.id, a.id])
+
+        try await store.move(id: c.id, to: 0)
+        order = await store.accounts().map(\.id)
+        XCTAssertEqual(order, [c.id, b.id, a.id])
+
+        let reloaded = try await makeStore().load()
+        XCTAssertEqual(reloaded.map(\.id), [c.id, b.id, a.id])
+        XCTAssertEqual(reloaded.map(\.sortIndex), [0, 1, 2])
+    }
+
     // MARK: Loading
 
     func testLoadWithMissingFileReturnsEmpty() async throws {
