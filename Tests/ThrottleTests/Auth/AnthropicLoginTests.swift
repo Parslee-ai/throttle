@@ -59,7 +59,7 @@ final class AnthropicLoginTests: XCTestCase {
         XCTAssertEqual(values["client_id"], "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
         XCTAssertEqual(values["response_type"], "code")
         XCTAssertEqual(values["redirect_uri"], "https://platform.claude.com/oauth/code/callback")
-        XCTAssertEqual(values["scope"], "user:profile")
+        XCTAssertEqual(values["scope"], AnthropicLogin.scope)
         XCTAssertEqual(values["code_challenge_method"], "S256")
         XCTAssertEqual(values["code_challenge"]?.count, 43)
         XCTAssertEqual(values["state"]?.count, 43)
@@ -75,7 +75,7 @@ final class AnthropicLoginTests: XCTestCase {
         XCTAssertNil(values["code"], "loopback mode must not request the hosted code page")
         XCTAssertEqual(values["redirect_uri"], "http://localhost:1456/callback")
         XCTAssertEqual(values["client_id"], "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
-        XCTAssertEqual(values["scope"], "user:profile")
+        XCTAssertEqual(values["scope"], AnthropicLogin.scope)
         XCTAssertEqual(values["code_challenge_method"], "S256")
 
         // Tear the listener down by cancelling the completion.

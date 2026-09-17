@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Reads Claude subscription usage through the OAuth usage endpoint.
 ///
@@ -34,6 +35,10 @@ struct AnthropicProvider: UsageProvider {
                 state: .ok
             )
         case 401, 403:
+            // The body is the provider's error object, never a token; it is
+            // still redacted and capped before it reaches the log.
+            let reason = Redactor.redact(String(decoding: response.body.prefix(300), as: UTF8.self))
+            Self.logger.error("Usage rejected with HTTP \(response.statusCode, privacy: .public): \(reason, privacy: .public)")
             throw UsageError.needsLogin
         case 429:
             throw UsageError.rateLimited(retryAfter: retryAfter(from: response))
@@ -43,6 +48,8 @@ struct AnthropicProvider: UsageProvider {
             throw UsageError.invalidResponse("HTTP \(response.statusCode)")
         }
     }
+
+    private static let logger = Logger(subsystem: "ai.parslee.throttle", category: "AnthropicProvider")
 
     // MARK: - Profile
 
