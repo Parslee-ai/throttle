@@ -62,7 +62,7 @@ final class OpenAIProviderTests: XCTestCase {
         XCTAssertEqual(status.email, "redacted@example.com", "payload email wins over the stored label")
         XCTAssertEqual(status.state, .ok)
         XCTAssertEqual(status.fetchedAt, fixedNow)
-        XCTAssertEqual(status.windows.map(\.label), ["Weekly"])
+        XCTAssertEqual(status.windows.map(\.label), ["Weekly", "GPT-5.3-Codex-Spark 5h", "GPT-5.3-Codex-Spark Weekly"], "primary windows first, then extra lanes so the UI can fold them")
         XCTAssertEqual(snapshot.planType, "pro")
         XCTAssertEqual(snapshot.additionalWindows.count, 2)
     }
