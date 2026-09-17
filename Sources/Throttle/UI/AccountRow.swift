@@ -109,9 +109,12 @@ struct AccountRow: View {
                         .controlSize(.small)
                 }
             case .rateLimited(let until):
-                Label("Rate limited until \(Formatting.clockTime(until))", systemImage: "nosign")
+                // A 429 from the provider's status endpoint, not the account's
+                // own quota. Say so, or the user reads it as "my plan is out".
+                Label("Status check throttled until \(Formatting.clockTime(until))", systemImage: "hourglass")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.orange)
+                    .help("\(account.provider.displayName) limits how often usage can be read. This is not your plan's quota; the next check runs at \(Formatting.clockTime(until)).")
             case .error(let message):
                 Label(message, systemImage: "exclamationmark.circle")
                     .font(.caption)
