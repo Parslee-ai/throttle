@@ -1,0 +1,7 @@
+{
+  "limits": [
+    { "kind": "session", "percent": 0, "resets_at": null, "is_active": true },
+    { "kind": "weekly_all", "percent": 0, "resets_at": null, "is_active": false },
+    { "kind": "weekly_scoped", "percent": 0, "resets_at": null, "scope": { "model": { "display_name": "Fable" } } }
+  ]
+}
