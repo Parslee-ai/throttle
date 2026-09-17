@@ -541,9 +541,14 @@ git -C "$ROOT_DIR" push origin main --tags
 ok "  pushed $TAG"
 
 step "Publishing"
+PRERELEASE_ARGS=()
+if [[ "$VERSION" == *-* ]]; then
+    PRERELEASE_ARGS=(--prerelease)
+fi
 gh release create "$TAG" "$PKG_PATH" \
     --title "Throttle $VERSION" \
-    --notes-file "$NOTES_PATH"
+    --notes-file "$NOTES_PATH" \
+    "${PRERELEASE_ARGS[@]}"
 
 ASSETS="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
 printf '  assets: %s\n' "$(printf '%s' "$ASSETS" | tr '\n' ' ')"
