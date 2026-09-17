@@ -5,8 +5,10 @@ import Foundation
 /// Only OAuth-facing read endpoints appear here. There is deliberately no
 /// messages or completions URL: Throttle reads usage, it never spends it.
 enum AnthropicEndpoints {
-    /// Current usage for the signed-in OAuth identity.
-    static let usage = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    /// Current usage for the signed-in OAuth identity. `skip_spend=1` asks for
+    /// the cheap window read without the spend computation; the bare path
+    /// answered every request from this app with a one-hour 429 (ISA D-32).
+    static let usage = URL(string: "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1")!
     /// Profile of the signed-in OAuth identity, read once after login.
     static let profile = URL(string: "https://api.anthropic.com/api/oauth/profile")!
     /// Primary token endpoint, takes a JSON body.
