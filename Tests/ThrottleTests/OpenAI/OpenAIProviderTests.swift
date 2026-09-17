@@ -250,6 +250,7 @@ final class OpenAIProviderTests: XCTestCase {
     /// The adapter's source must never mention the credit-spending endpoint
     /// or the completions endpoint, in code or in a string.
     func testOpenAISourcesNeverNameSpendingEndpoints() throws {
+        try RepoAudit.requireRepositoryAccess()
         let directory = OpenAIFixtures.openAISourcesDirectory
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".swift") }
         XCTAssertEqual(Set(files), ["OpenAIEndpoints.swift", "JWTClaims.swift", "OpenAIProvider.swift", "OpenAIUsageParser.swift"])

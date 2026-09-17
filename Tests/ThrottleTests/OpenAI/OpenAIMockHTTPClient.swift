@@ -70,7 +70,7 @@ enum OpenAIFixtures {
     }
 
     static func whamUsage() throws -> Data {
-        try Data(contentsOf: fixturesDirectory.appendingPathComponent("wham-usage.json"))
+        try TestFixtures.data("wham-usage")
     }
 
     /// A payload with both primary windows populated and no extra lanes.

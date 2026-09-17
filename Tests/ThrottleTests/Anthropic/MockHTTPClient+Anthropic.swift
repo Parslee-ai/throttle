@@ -62,18 +62,14 @@ final class AnthropicMockHTTPClient: HTTPClient, @unchecked Sendable {
     }
 }
 
-/// Loads a captured payload from `Tests/Fixtures` by walking up from this
-/// file. The xcodeproj has no resource bundle for tests, so `Bundle.module`
-/// is not available.
+/// Loads a captured payload from the test bundle. `Tests/Fixtures` is a
+/// synchronized group on the test target, so every JSON file in it ships as a
+/// resource. Reading the repository path instead would go through the host
+/// app and trip a Files-and-Folders privacy prompt under `~/Documents`, which a
+/// headless test run can never answer (the suite hung on exactly that).
 enum AnthropicFixtures {
     static func data(_ name: String) throws -> Data {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // Anthropic/
-            .deletingLastPathComponent()  // ThrottleTests/
-            .deletingLastPathComponent()  // Tests/
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent("\(name).json")
-        return try Data(contentsOf: url)
+        try TestFixtures.data(name)
     }
 }
 
