@@ -12,7 +12,23 @@ struct DetailWindow: View {
     @State private var pendingRemoval: Account?
     @State private var showingSettings = false
     @State private var importPicker: ImportPicker?
-    @State private var listHeight: CGFloat = 0
+    @State private var reportedHeights: [UUID: CGFloat] = [:]
+
+    /// Rows a lazy `List` has not rendered yet report no height. Sizing the
+    /// list only from reported rows starves the rest: at height 1 only the
+    /// first row renders, so only the first row reports, so the list stays one
+    /// row tall until something else forces a relayout. Every unreported row
+    /// counts at an estimate so all rows get laid out, then real heights take
+    /// over.
+    static let estimatedRowHeight: CGFloat = 96
+
+    private var listHeight: CGFloat {
+        let ids = model.accounts.map(\.id)
+        let total = ids.reduce(CGFloat(0)) { sum, id in
+            sum + (reportedHeights[id] ?? Self.estimatedRowHeight)
+        }
+        return max(total, 1)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -139,9 +155,9 @@ struct DetailWindow: View {
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 1)
             .onPreferenceChange(RowHeightsKey.self) { heights in
-                listHeight = heights.values.reduce(0, +)
+                reportedHeights = heights
             }
-            .frame(height: min(max(listHeight, 1), Self.maxListHeight))
+            .frame(height: min(listHeight, Self.maxListHeight))
         }
     }
 
