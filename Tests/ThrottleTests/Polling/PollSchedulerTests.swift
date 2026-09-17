@@ -406,6 +406,99 @@ final class PollSchedulerTests: XCTestCase {
         _ = o1
     }
 
+    // MARK: The provider horizon survives a relaunch (ISC-99)
+
+    func testAnthropic429WritesTheProviderHorizonToDisk() async throws {
+        let f = makeFixture()
+        let a1 = try await f.addAccount(.anthropic, email: "a1@example.com")
+        let o1 = try await f.addAccount(.openai, email: "o1@example.com")
+        f.anthropic.setBehavior(.fail(.rateLimited(retryAfter: 3_600)), for: a1)
+        f.openai.setBehavior(.fail(.rateLimited(retryAfter: 3_600)), for: o1)
+        let t0 = f.startTime
+
+        await f.scheduler.start()
+        await f.clock.advance(by: 10)
+        await f.waitForCycles(1)
+
+        let data = try Data(contentsOf: f.rateLimitsFile)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), ["anthropic"], "only the provider-wide horizon is stored; the OpenAI 429 is per account")
+        XCTAssertEqual(object["anthropic"] as? String, t0.addingTimeInterval(3_600).formatted(.iso8601))
+        XCTAssertEqual(try BackoffPersistence.decode(data), [.anthropic: t0.addingTimeInterval(3_600)])
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: f.rateLimitsFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testRelaunchInsideTheHorizonSkipsAnthropicWithoutARequestUntilItPasses() async throws {
+        let first = makeFixture()
+        let a1 = try await first.addAccount(.anthropic, email: "a1@example.com")
+        let a2 = try await first.addAccount(.anthropic, email: "a2@example.com")
+        let o1 = try await first.addAccount(.openai, email: "o1@example.com")
+        first.anthropic.setBehavior(.fail(.rateLimited(retryAfter: 3_600)), for: a1)
+        let t0 = first.startTime
+
+        await first.scheduler.start()
+        await first.clock.advance(by: 10)
+        await first.waitForCycles(1)
+        XCTAssertEqual(first.anthropic.fetchCount, 1)
+        await first.scheduler.stop()
+
+        // Quit and relaunch 20 minutes later: new scheduler, empty cache, same disk.
+        await first.clock.advance(by: 1_200)
+        let second = first.relaunched()
+        try await second.store.load()
+
+        await second.scheduler.start()
+        await second.clock.advance(by: 10)
+        await second.waitForCycles(1)
+        XCTAssertEqual(second.anthropic.fetchCount, 0, "no Anthropic request on launch inside the saved horizon")
+        XCTAssertEqual(second.openai.fetchCount, 1, "OpenAI is not under the Anthropic horizon")
+        for account in [a1, a2] {
+            let entry = try await second.requireEntry(account)
+            XCTAssertEqual(entry.status.state, .rateLimited(until: t0.addingTimeInterval(3_600)), account.email)
+            XCTAssertEqual(entry.nextAttemptAt, t0.addingTimeInterval(3_600), account.email)
+        }
+        let openai = try await second.requireEntry(o1)
+        XCTAssertEqual(openai.status.state, .ok)
+
+        // "Add account" calls refreshNow; it must not poke the endpoint either.
+        await second.scheduler.refreshNow()
+        await second.clock.advance(by: 10)
+        await second.waitForCycles(2)
+        XCTAssertEqual(second.anthropic.fetchCount, 0, "refresh now honours the restored horizon")
+
+        // Once the horizon passes, the next cycle fetches and the file clears.
+        await second.clock.advance(by: 3_600)
+        await waitUntil("anthropic fetched after the horizon") { second.anthropic.fetchCount >= 2 }
+        await waitUntil("rate-limit file cleared") {
+            (try? BackoffPersistence.decode(Data(contentsOf: second.rateLimitsFile))) == [:]
+        }
+        await second.scheduler.stop()
+    }
+
+    func testRelaunchAfterTheHorizonIgnoresTheSavedValueAndFetches() async throws {
+        let first = makeFixture()
+        let a1 = try await first.addAccount(.anthropic, email: "a1@example.com")
+        first.anthropic.setBehavior(.fail(.rateLimited(retryAfter: 600)), for: a1)
+
+        await first.scheduler.start()
+        await first.clock.advance(by: 10)
+        await first.waitForCycles(1)
+        await first.scheduler.stop()
+
+        await first.clock.advance(by: 601)
+        let second = first.relaunched()
+        try await second.store.load()
+        await second.scheduler.start()
+        await second.clock.advance(by: 10)
+        await second.waitForCycles(1)
+        XCTAssertEqual(second.anthropic.fetchCount, 1, "an expired horizon is ignored, so the launch cycle fetches")
+        let entry = try await second.requireEntry(a1)
+        XCTAssertEqual(entry.status.state, .ok)
+        await second.scheduler.stop()
+    }
+
     func testRefreshNowDuringACycleIsQueuedOnce() async throws {
         let f = makeFixture(PollSettings(pollInterval: 300, perAccountTimeout: 15, cycleDeadline: 60))
         let account = try await f.addAccount(.anthropic)

@@ -130,13 +130,30 @@ struct PollingFixture {
     let scheduler: PollScheduler
     let settings: PollSettings
 
+    /// A fresh fixture under its own temporary directory.
     init(settings: PollSettings = PollSettings()) {
+        self.init(
+            settings: settings,
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ThrottlePollingTests-\(UUID().uuidString)", isDirectory: true),
+            credentials: InMemoryCredentialStore(),
+            clock: TestClock()
+        )
+    }
+
+    /// A second "launch" over the same directory, credentials, and clock, as
+    /// if the app had quit and relaunched: new store, cache, mocks, scheduler.
+    func relaunched() -> PollingFixture {
+        PollingFixture(settings: settings, directory: directory, credentials: credentials, clock: clock)
+    }
+
+    private init(settings: PollSettings, directory: URL, credentials: InMemoryCredentialStore, clock: TestClock) {
         self.settings = settings
-        directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ThrottlePollingTests-\(UUID().uuidString)", isDirectory: true)
-        credentials = InMemoryCredentialStore()
-        store = AccountStore(credentials: credentials, paths: AppPaths(applicationSupportDirectory: directory))
-        clock = TestClock()
+        self.directory = directory
+        self.credentials = credentials
+        self.clock = clock
+        let paths = AppPaths(applicationSupportDirectory: directory)
+        store = AccountStore(credentials: credentials, paths: paths)
         cache = StatusCache(clock: clock, staleAfter: settings.staleAfter)
         anthropic = MockUsageProvider(provider: .anthropic, clock: clock)
         openai = MockUsageProvider(provider: .openai, clock: clock)
@@ -146,8 +163,13 @@ struct PollingFixture {
             resolver: PassthroughCredentialResolver(),
             cache: cache,
             settings: settings,
-            clock: clock
+            clock: clock,
+            backoffPersistence: BackoffPersistence(paths: paths)
         )
+    }
+
+    var rateLimitsFile: URL {
+        AppPaths(applicationSupportDirectory: directory).rateLimitsFile
     }
 
     var startTime: Date { clock.now() }
