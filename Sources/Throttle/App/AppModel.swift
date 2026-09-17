@@ -88,27 +88,28 @@ final class AppModel {
 
     @ObservationIgnored private let store: AccountStore
     @ObservationIgnored private let cache: StatusCache
+    @ObservationIgnored private let persistence: StatusCachePersistence
     @ObservationIgnored private let scheduler: PollScheduler
-    @ObservationIgnored private let anthropicProvider = AnthropicProvider()
-    @ObservationIgnored private let openAIProvider = OpenAIProvider()
+    @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let httpClient = URLSessionHTTPClient()
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
 
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
-        let store = AccountStore(credentials: KeychainStore(), paths: AppPaths.standard)
+        let paths = AppPaths.standard
+        let store = AccountStore(credentials: KeychainStore(), paths: paths)
         let clock = SystemClock()
         let pollSettings = settings.pollSettings
         let cache = StatusCache(clock: clock, staleAfter: pollSettings.staleAfter)
+        let registry = ProviderRegistry(client: httpClient)
         self.store = store
         self.cache = cache
+        self.registry = registry
+        self.persistence = StatusCachePersistence(paths: paths, clock: clock)
         self.scheduler = PollScheduler(
             store: store,
-            providers: [
-                .anthropic: anthropicProvider,
-                .openai: openAIProvider,
-            ],
+            providers: registry.usageProviders,
             resolver: TokenRefresher(),
             cache: cache,
             settings: pollSettings,
@@ -128,8 +129,11 @@ final class AppModel {
         rotation.start()
         let scheduler = scheduler
         let cache = cache
+        let persistence = persistence
         Task {
             await self.loadAccounts()
+            await self.seedCache()
+            await persistence.observe(cache)
             await scheduler.observeSleepWake()
             await scheduler.start()
         }
@@ -150,6 +154,15 @@ final class AppModel {
         }
     }
 
+    /// Restores the previous run's last known status for every account that
+    /// still exists (ISC-90). Entries for removed accounts are dropped.
+    private func seedCache() async {
+        let known = Set(accounts.map(\.id))
+        let persisted = await persistence.load().filter { known.contains($0.key) }
+        guard !persisted.isEmpty else { return }
+        await cache.seed(from: persisted)
+    }
+
     private func publishAccounts() async {
         let list = await store.accounts()
         accounts = list
@@ -164,6 +177,17 @@ final class AppModel {
             .map(\.status.fetchedAt)
             .max()
         adoptProviderEmails(from: snapshot)
+        adoptPlanLabels(from: snapshot)
+    }
+
+    /// The plan badge follows what the usage payload reports (ISC-74), so a
+    /// plan change shows up without a re-login.
+    private func adoptPlanLabels(from snapshot: [UUID: CachedStatus]) {
+        for account in accounts {
+            guard let plan = snapshot[account.id]?.status.planLabel, !plan.isEmpty,
+                  plan != settings.planLabel(for: account.id) else { continue }
+            settings.setPlanLabel(plan, for: account.id)
+        }
     }
 
     /// An imported account starts life labelled by its source tool; once a
@@ -254,6 +278,28 @@ final class AppModel {
         }
     }
 
+    /// Moves an account to a position in display order and persists the new
+    /// order (ISC-92).
+    func move(id: UUID, to index: Int) {
+        Task {
+            do {
+                try await store.move(id: id, to: index)
+                await publishAccounts()
+            } catch {
+                report(error, context: "Could not reorder the accounts")
+            }
+        }
+    }
+
+    /// A list drag: `source` and `destination` in SwiftUI's `onMove` terms,
+    /// where the destination is an insertion point in the pre-move list.
+    func move(from source: IndexSet, to destination: Int) {
+        guard let from = source.first, accounts.indices.contains(from) else { return }
+        let target = from < destination ? destination - 1 : destination
+        guard target != from else { return }
+        move(id: accounts[from].id, to: target)
+    }
+
     func planLabel(for account: Account) -> String? {
         settings.planLabel(for: account.id)
     }
@@ -310,12 +356,7 @@ final class AppModel {
     }
 
     private func login(for provider: Provider) -> any OAuthLogin {
-        switch provider {
-        case .anthropic:
-            return AnthropicLogin(client: httpClient, provider: anthropicProvider)
-        case .openai:
-            return OpenAILogin(client: httpClient, provider: openAIProvider)
-        }
+        registry.login(for: provider, client: httpClient)
     }
 
     /// Persists a finished login. A new login dedupes by provider + email
@@ -343,20 +384,13 @@ final class AppModel {
     /// Reads the other tool's login now. Called only from the import action,
     /// never at launch (ISC-137).
     func importCandidates(for provider: Provider) -> [ImportCandidate] {
-        switch provider {
-        case .anthropic: return CredentialImport.claudeCodeCandidates()
-        case .openai: return CredentialImport.codexCandidates()
-        }
+        registry.importCandidates(for: provider)
     }
 
-    /// Whether a Codex CLI login file exists. A file-existence check only; the
-    /// file is not read until the user imports.
-    var codexLoginFileExists: Bool {
-        let file = CredentialImport.codexAuthFile(
-            environment: ProcessInfo.processInfo.environment,
-            home: FileManager.default.homeDirectoryForCurrentUser
-        )
-        return FileManager.default.fileExists(atPath: file.path)
+    /// Whether the provider's import source could exist on this Mac. At most a
+    /// file-existence check; nothing is read until the user imports.
+    func importSourceExists(for provider: Provider) -> Bool {
+        registry.importSourceExists(for: provider)
     }
 
     func importAccount(_ candidate: ImportCandidate) {

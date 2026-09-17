@@ -87,11 +87,14 @@ struct DetailWindow: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// A `List` so rows can be dragged into a new order (ISC-92); on macOS
+    /// `onMove` works without an edit mode. Each row reports its height so the
+    /// window hugs the content up to `maxListHeight`, then scrolls.
     private var accountList: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.accounts) { account in
+            List {
+                ForEach(model.accounts) { account in
+                    VStack(spacing: 0) {
                         AccountRow(
                             account: account,
                             cached: model.statuses[account.id],
@@ -103,12 +106,23 @@ struct DetailWindow: View {
                         .contextMenu { rowMenu(for: account) }
                         Divider().padding(.leading, 12)
                     }
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: RowHeightsKey.self, value: [account.id: proxy.size.height])
+                    })
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
-                .background(GeometryReader { proxy in
-                    Color.clear.preference(key: ListHeightKey.self, value: proxy.size.height)
-                })
+                .onMove { source, destination in
+                    model.move(from: source, to: destination)
+                }
             }
-            .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
+            .onPreferenceChange(RowHeightsKey.self) { heights in
+                listHeight = heights.values.reduce(0, +)
+            }
             .frame(height: min(max(listHeight, 1), Self.maxListHeight))
         }
     }
@@ -178,9 +192,9 @@ struct DetailWindow: View {
     }
 }
 
-private struct ListHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+private struct RowHeightsKey: PreferenceKey {
+    static let defaultValue: [UUID: CGFloat] = [:]
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }

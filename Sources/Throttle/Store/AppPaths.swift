@@ -2,7 +2,7 @@ import Foundation
 
 /// Where Throttle keeps its non-secret files on disk.
 ///
-/// The only file today is `accounts.json`. Secrets never live under this
+/// The files are `accounts.json` and `status-cache.json`. Secrets never live under this
 /// directory; they live in the Keychain (see `KeychainStore`). The base
 /// directory is injectable so tests run against a temporary directory and
 /// never touch the real `~/Library/Application Support/Throttle`.
@@ -14,6 +14,12 @@ struct AppPaths: Sendable, Hashable {
     /// The non-secret account list, a JSON array of `Account`.
     var accountsFile: URL {
         applicationSupportDirectory.appendingPathComponent("accounts.json", isDirectory: false)
+    }
+
+    /// The last known status per account, a JSON object of `CachedStatus`
+    /// keyed by account id (ISC-90). Never holds a token.
+    var statusCacheFile: URL {
+        applicationSupportDirectory.appendingPathComponent("status-cache.json", isDirectory: false)
     }
 
     init(applicationSupportDirectory: URL) {
