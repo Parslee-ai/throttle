@@ -11,6 +11,9 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         case succeed(usedPercent: Double)
         case fail(UsageError)
         case hang
+        /// Ignores cancellation and keeps running on wall time for the given
+        /// number of seconds, like a fetch stuck in a non-cooperative library.
+        case ignoreCancellation(seconds: TimeInterval)
     }
 
     struct Start: Equatable {
@@ -91,6 +94,20 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         case .hang:
             try await Task.sleep(for: .seconds(365 * 86_400))
             throw UsageError.transport(URLError(.timedOut))
+        case .ignoreCancellation(let seconds):
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                // `try?` swallows the CancellationError and keeps going.
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return AccountStatus(
+                accountID: account.id,
+                provider: provider,
+                email: account.email,
+                windows: [UsageWindow(key: "5h", label: "5h", usedPercent: 1, resetsAt: nil, durationSeconds: 18_000)],
+                fetchedAt: now,
+                state: .ok
+            )
         }
     }
 

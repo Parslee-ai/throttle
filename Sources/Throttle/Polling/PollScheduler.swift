@@ -451,26 +451,98 @@ actor PollScheduler {
         return Redactor.redact(raw)
     }
 
-    /// Races `operation` against the clock. The loser is cancelled. The
-    /// resolver's refresh ignores that cancellation by contract, so a timeout
-    /// here never half-applies a token rotation.
+    /// Races `operation` against the clock and returns whichever finishes
+    /// first; the loser is cancelled and its result discarded (ISC-97).
+    ///
+    /// The work runs in a detached task rather than a task-group child on
+    /// purpose: a group waits for every child before it returns, so a fetch
+    /// that ignores cancellation would hold the timeout path open for as long
+    /// as it liked. Here the timer resumes the caller on the deadline whatever
+    /// the work is doing. The abandoned work keeps running to completion in
+    /// the background: a refresh in flight inside it still finishes and
+    /// persists its rotated token (D-7), and its status, arriving after the
+    /// deadline, is dropped rather than recorded.
+    ///
+    /// Cancelling the caller (the cycle deadline, `stop()`) cancels both the
+    /// work and the timer and throws `CancellationError`.
     private func withTimeout<T: Sendable>(
         _ seconds: TimeInterval,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let clock = clock
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await clock.sleep(for: seconds)
-                throw PollTimeoutError(seconds: seconds)
+        let race = FirstWins<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                race.arm(continuation)
+                let work = Task.detached {
+                    do {
+                        race.finish(.success(try await operation()))
+                    } catch {
+                        race.finish(.failure(error))
+                    }
+                }
+                let timer = Task.detached {
+                    do {
+                        try await clock.sleep(for: seconds)
+                        race.finish(.failure(PollTimeoutError(seconds: seconds)))
+                    } catch {
+                        // Cancelled because the work won or the caller left.
+                    }
+                }
+                race.attach(work: work, timer: timer)
             }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else {
-                throw CancellationError()
-            }
-            return first
+        } onCancel: {
+            race.finish(.failure(CancellationError()))
         }
+    }
+}
+
+/// Resumes one continuation with the first result offered and cancels the two
+/// tasks in the race as soon as it is decided. Every later result is dropped.
+private final class FirstWins<T: Sendable>: @unchecked Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<T, any Error>?
+        var result: Result<T, any Error>?
+        var work: Task<Void, Never>?
+        var timer: Task<Void, Never>?
+    }
+
+    private let state = OSAllocatedUnfairLock(uncheckedState: State())
+
+    func arm(_ continuation: CheckedContinuation<T, any Error>) {
+        let pending: Result<T, any Error>? = state.withLock { s in
+            if let result = s.result { return result }
+            s.continuation = continuation
+            return nil
+        }
+        // `finish` ran before `arm` (a cancellation that landed first).
+        if let pending { continuation.resume(with: pending) }
+    }
+
+    func attach(work: Task<Void, Never>, timer: Task<Void, Never>) {
+        let alreadyDecided: Bool = state.withLock { s in
+            s.work = work
+            s.timer = timer
+            return s.result != nil
+        }
+        if alreadyDecided {
+            work.cancel()
+            timer.cancel()
+        }
+    }
+
+    func finish(_ result: Result<T, any Error>) {
+        let (continuation, work, timer): (CheckedContinuation<T, any Error>?, Task<Void, Never>?, Task<Void, Never>?) =
+            state.withLock { s in
+                guard s.result == nil else { return (nil, nil, nil) }
+                s.result = result
+                let continuation = s.continuation
+                s.continuation = nil
+                return (continuation, s.work, s.timer)
+            }
+        continuation?.resume(with: result)
+        work?.cancel()
+        timer?.cancel()
     }
 }
 
