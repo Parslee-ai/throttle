@@ -13,19 +13,29 @@ struct AccountCredential: Sendable {
     /// The provider's own account identifier, when it issues one.
     var accountID: String?
     var scopes: [String]
+    /// When the refresh token itself expires, from `refresh_token_expires_in`
+    /// (ISC-61). `nil` when the provider does not say.
+    var refreshTokenExpiresAt: Date?
+    /// The OpenID `id_token` from the last exchange, when the provider issues
+    /// one (ISC-81). Stored alongside the other tokens, never parsed by the UI.
+    var idToken: String?
 
     init(
         accessToken: String,
         refreshToken: String? = nil,
         expiresAt: Date? = nil,
         accountID: String? = nil,
-        scopes: [String] = []
+        scopes: [String] = [],
+        refreshTokenExpiresAt: Date? = nil,
+        idToken: String? = nil
     ) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresAt = expiresAt
         self.accountID = accountID
         self.scopes = scopes
+        self.refreshTokenExpiresAt = refreshTokenExpiresAt
+        self.idToken = idToken
     }
 }
 

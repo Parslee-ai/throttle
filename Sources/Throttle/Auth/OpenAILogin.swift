@@ -109,7 +109,8 @@ struct OpenAILogin: OAuthLogin {
             refreshToken: OAuthFlow.string(object, "refresh_token"),
             expiresAt: expiresAt,
             accountID: accountID,
-            scopes: OpenAIEndpoints.scopes
+            scopes: OpenAIEndpoints.scopes,
+            idToken: OAuthFlow.string(object, "id_token")
         )
         return LoginResult(
             credential: credential,

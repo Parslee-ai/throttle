@@ -179,12 +179,21 @@ struct AnthropicProvider: UsageProvider {
             scopes = scope.split(separator: " ").map(String.init)
         }
 
+        var refreshTokenExpiresAt = previous.refreshTokenExpiresAt
+        if let seconds = root["refresh_token_expires_in"] as? NSNumber {
+            refreshTokenExpiresAt = now().addingTimeInterval(seconds.doubleValue)
+        } else if let text = root["refresh_token_expires_in"] as? String, let seconds = Double(text) {
+            refreshTokenExpiresAt = now().addingTimeInterval(seconds)
+        }
+
         return AccountCredential(
             accessToken: accessToken,
             refreshToken: nonEmpty(root["refresh_token"] as? String) ?? previous.refreshToken,
             expiresAt: expiresAt,
             accountID: previous.accountID,
-            scopes: scopes
+            scopes: scopes,
+            refreshTokenExpiresAt: refreshTokenExpiresAt,
+            idToken: previous.idToken
         )
     }
 

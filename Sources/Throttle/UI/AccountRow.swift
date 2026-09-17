@@ -9,16 +9,14 @@ struct AccountRow: View {
     let now: Date
     let onReLogin: () -> Void
 
-    /// Keys with this prefix are secondary lanes shown in a disclosure (ISC-120).
-    static let lanePrefix = "lane:"
-
     private var windows: [UsageWindow] {
         guard let cached else { return [] }
         return cached.status.windows.isEmpty ? (cached.lastGoodWindows ?? []) : cached.status.windows
     }
 
-    private var primaryWindows: [UsageWindow] { windows.filter { !$0.key.hasPrefix(Self.lanePrefix) } }
-    private var laneWindows: [UsageWindow] { windows.filter { $0.key.hasPrefix(Self.lanePrefix) } }
+    /// Secondary lanes are shown in a disclosure after the primary windows (ISC-120).
+    private var primaryWindows: [UsageWindow] { windows.filter { !$0.isLane } }
+    private var laneWindows: [UsageWindow] { windows.filter(\.isLane) }
 
     /// Windows dim whenever they are not a current, successful reading.
     private var dimmed: Bool {

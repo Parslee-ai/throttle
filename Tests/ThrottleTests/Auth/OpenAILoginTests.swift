@@ -162,6 +162,13 @@ final class OpenAILoginTests: XCTestCase {
         XCTAssertEqual(result.credential.expiresAt, Date(timeIntervalSince1970: 1_800_007_200))
     }
 
+    func testResultStoresIDToken() throws {
+        let token = idToken()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(tokenBody(idToken: token).utf8)) as? [String: Any])
+        let result = try OpenAILogin.result(from: object, now: fixedNow)
+        XCTAssertEqual(result.credential.idToken, token, "ISC-81")
+    }
+
     func testMissingAccountIDIsAnError() throws {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(
             with: Data(tokenBody(idToken: idToken(accountID: nil)).utf8)

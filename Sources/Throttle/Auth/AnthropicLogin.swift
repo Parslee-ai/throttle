@@ -145,8 +145,9 @@ struct AnthropicLogin: OAuthLogin {
     }
 
     /// Maps a token response onto a credential (ISC-61). `refresh_token_expires_in`
-    /// has no slot on `AccountCredential`; the refresh doctrine handles an
-    /// expired refresh token by flipping the account to needs-login instead.
+    /// is stored as `refreshTokenExpiresAt` when present; the refresh doctrine
+    /// still handles an expired refresh token by flipping the account to
+    /// needs-login rather than acting on the date.
     static func credential(from object: [String: Any], now: Date) throws -> AccountCredential {
         guard let accessToken = OAuthFlow.string(object, "access_token") else {
             throw LoginError.tokenExchange("the token response had no access_token")
@@ -158,7 +159,8 @@ struct AnthropicLogin: OAuthLogin {
             refreshToken: OAuthFlow.string(object, "refresh_token"),
             expiresAt: OAuthFlow.seconds(object, "expires_in").map { now.addingTimeInterval($0) },
             accountID: nil,
-            scopes: scopes
+            scopes: scopes,
+            refreshTokenExpiresAt: OAuthFlow.seconds(object, "refresh_token_expires_in").map { now.addingTimeInterval($0) }
         )
     }
 }
