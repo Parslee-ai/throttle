@@ -82,7 +82,7 @@ enum Formatting {
         return "\(minutes)m"
     }
 
-    /// `HH:mm`, for `⛔ until 14:05` and settings text.
+    /// `HH:mm`, for `⏳ retry 14:05` and settings text.
     static func clockTime(_ date: Date, calendar: Calendar = .current) -> String {
         formatted(date, "HH:mm", calendar: calendar)
     }
@@ -157,7 +157,7 @@ enum Formatting {
             return BarLabel(
                 symbolName: symbol,
                 email: email,
-                segments: [BarSegment(text: "⛔ until \(clockTime(until))", band: .critical)],
+                segments: [BarSegment(text: "⏳ retry \(clockTime(until))", band: .warning)],
                 dimmed: false
             )
         case .ok, .error:

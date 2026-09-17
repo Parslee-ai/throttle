@@ -128,7 +128,7 @@ final class FormattingTests: XCTestCase {
         let until = now.addingTimeInterval(1800)
         let limited = UIFixtures.cached(for: account, windows: [], state: .rateLimited(until: until))
         let text = Formatting.barLabel(account: account, cached: limited, showRemaining: false, now: now).segments.first?.text
-        XCTAssertEqual(text, "⛔ until \(Formatting.clockTime(until))")
+        XCTAssertEqual(text, "⏳ retry \(Formatting.clockTime(until))")
 
         let empty = Formatting.barLabel(account: account, cached: nil, showRemaining: false, now: now)
         XCTAssertTrue(empty.dimmed)
