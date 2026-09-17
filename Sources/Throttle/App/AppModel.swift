@@ -91,6 +91,7 @@ final class AppModel {
     @ObservationIgnored private let persistence: StatusCachePersistence
     @ObservationIgnored private let scheduler: PollScheduler
     @ObservationIgnored private let registry: ProviderRegistry
+    @ObservationIgnored private let diagnostics: Diagnostics
     @ObservationIgnored private let httpClient = URLSessionHTTPClient()
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
@@ -102,10 +103,12 @@ final class AppModel {
         let clock = SystemClock()
         let pollSettings = settings.pollSettings
         let cache = StatusCache(clock: clock, staleAfter: pollSettings.staleAfter)
-        let registry = ProviderRegistry(client: httpClient)
+        let diagnostics = Diagnostics(paths: paths)
+        let registry = ProviderRegistry(client: httpClient, diagnostics: diagnostics)
         self.store = store
         self.cache = cache
         self.registry = registry
+        self.diagnostics = diagnostics
         self.persistence = StatusCachePersistence(paths: paths, clock: clock)
         self.scheduler = PollScheduler(
             store: store,
@@ -114,7 +117,8 @@ final class AppModel {
             cache: cache,
             settings: pollSettings,
             clock: clock,
-            backoffPersistence: BackoffPersistence(paths: paths)
+            backoffPersistence: BackoffPersistence(paths: paths),
+            diagnostics: diagnostics
         )
         self.rotation = RotationController(interval: settings.rotationInterval)
     }
@@ -242,6 +246,22 @@ final class AppModel {
     /// which still honours single-flight and any active backoff (ISC-101).
     func refresh(_ account: Account) {
         refreshAll()
+    }
+
+    /// The user's override for a provider throttle: clears the rate-limit
+    /// horizon for the account's provider and fetches now.
+    func retryProvider(for account: Account) {
+        Task { await scheduler.retryProvider(account.provider) }
+    }
+
+    /// Shows `diagnostics.log` in Finder, creating an empty file first if no
+    /// event has been written yet.
+    func revealDiagnosticsLog() {
+        let diagnostics = diagnostics
+        Task {
+            await diagnostics.ensureFileExists()
+            NSWorkspace.shared.activateFileViewerSelecting([diagnostics.fileURL])
+        }
     }
 
     func remove(_ account: Account) {

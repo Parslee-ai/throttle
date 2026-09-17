@@ -9,9 +9,9 @@ struct ProviderRegistry: Sendable {
     private let anthropic: AnthropicProvider
     private let openAI: OpenAIProvider
 
-    init(client: HTTPClient = URLSessionHTTPClient()) {
-        anthropic = AnthropicProvider(client: client)
-        openAI = OpenAIProvider(client: client)
+    init(client: HTTPClient = URLSessionHTTPClient(), diagnostics: Diagnostics? = nil) {
+        anthropic = AnthropicProvider(client: client, diagnostics: diagnostics)
+        openAI = OpenAIProvider(client: client, diagnostics: diagnostics)
     }
 
     /// The usage adapter for a provider.

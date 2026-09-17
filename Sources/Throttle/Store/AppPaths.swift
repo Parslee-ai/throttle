@@ -2,7 +2,8 @@ import Foundation
 
 /// Where Throttle keeps its non-secret files on disk.
 ///
-/// The files are `accounts.json`, `status-cache.json`, and `rate-limits.json`. Secrets never live under this
+/// The files are `accounts.json`, `status-cache.json`, `rate-limits.json`,
+/// and `diagnostics.log`. Secrets never live under this
 /// directory; they live in the Keychain (see `KeychainStore`). The base
 /// directory is injectable so tests run against a temporary directory and
 /// never touch the real `~/Library/Application Support/Throttle`.
@@ -27,6 +28,13 @@ struct AppPaths: Sendable, Hashable {
     /// else (see `BackoffPersistence`).
     var rateLimitsFile: URL {
         applicationSupportDirectory.appendingPathComponent("rate-limits.json", isDirectory: false)
+    }
+
+    /// The on-disk diagnostics log, one JSON object per line (see
+    /// `Diagnostics`). Request headers are recorded with `Authorization`
+    /// removed and bodies pass through `Redactor`, so it never holds a token.
+    var diagnosticsFile: URL {
+        applicationSupportDirectory.appendingPathComponent("diagnostics.log", isDirectory: false)
     }
 
     init(applicationSupportDirectory: URL) {
