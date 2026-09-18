@@ -27,6 +27,12 @@ struct AnthropicProvider: UsageProvider {
     // MARK: - Usage
 
     func fetchStatus(account: Account, credential: AccountCredential) async throws -> AccountStatus {
+        // A token from the API-console login carries only `user:profile`; the
+        // usage endpoint refuses it and repeated refusals earn a 429 (D-34).
+        // Do not spend a request on it: the row needs a subscription login.
+        if Self.isConsoleToken(credential) {
+            throw UsageError.needsLogin
+        }
         let request = authorizedRequest(url: AnthropicEndpoints.usage, accessToken: credential.accessToken)
         let response = try await send(request)
         if response.statusCode != 200 {
@@ -71,6 +77,13 @@ struct AnthropicProvider: UsageProvider {
     }
 
     private static let logger = Logger(subsystem: "ai.parslee.throttle", category: "AnthropicProvider")
+
+    /// True when the credential was minted by the console authorize page:
+    /// it names scopes and none of them is `user:inference`. A credential with
+    /// no recorded scopes (an import) is given the benefit of the doubt.
+    static func isConsoleToken(_ credential: AccountCredential) -> Bool {
+        !credential.scopes.isEmpty && !credential.scopes.contains("user:inference")
+    }
 
     /// The provider's message when a 403 body is a permission error, already
     /// redacted, or `nil` when the body is anything else (not JSON, no

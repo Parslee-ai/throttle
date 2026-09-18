@@ -173,15 +173,11 @@ struct DetailWindow: View {
         Button("Move down") { model.moveDown(account) }
             .disabled(model.accounts.last?.id == account.id)
         Divider()
-        // A forbidden account gets no re-login item at all: the organization's
-        // refusal is not a credential problem (D-33).
         switch model.statuses[account.id]?.status.state {
-        case .needsLogin:
-            Button("Log in again") { model.reLogin(account) }
-        case .forbidden:
-            EmptyView()
+        case .needsLogin, .forbidden:
+            Button("Sign in again") { model.reLogin(account) }
         default:
-            Button("Log in again…") { model.reLogin(account) }
+            Button("Sign in again…") { model.reLogin(account) }
         }
         Button("Remove…", role: .destructive) { pendingRemoval = account }
     }

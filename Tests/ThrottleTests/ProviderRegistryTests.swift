@@ -33,6 +33,7 @@ final class ProviderRegistryTests: XCTestCase {
     }
 
     func testNoProviderCaseIsNamedInAppOrUI() throws {
+        try RepoAudit.requireRepositoryAccess()
         let roots = ["Sources/Throttle/UI", "Sources/Throttle/App"].map { RepoAudit.root.appendingPathComponent($0) }
         var offenders: [String] = []
         for root in roots {

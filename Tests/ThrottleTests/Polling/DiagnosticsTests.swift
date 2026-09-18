@@ -20,7 +20,7 @@ final class DiagnosticsTests: XCTestCase {
             refreshToken: AnthropicSampleSecret.refreshToken,
             expiresAt: fixedNow.addingTimeInterval(3600),
             accountID: "acct_test",
-            scopes: ["user:profile"]
+            scopes: ["user:profile", "user:inference"]
         )
     }
 
