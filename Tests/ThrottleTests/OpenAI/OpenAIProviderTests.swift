@@ -110,6 +110,27 @@ final class OpenAIProviderTests: XCTestCase {
         await assertThrows(needsLogin: { try await provider.fetchStatus(account: OpenAIFixtures.account, credential: self.credential) })
     }
 
+    /// D-33: a 403 whose body is a permission error is the organization
+    /// refusing this client, not a login problem.
+    func test403WithPermissionErrorIsForbidden() async {
+        let body = #"{"error":{"type":"permission_error","message":"This organization does not allow this client.","code":"org_forbidden"}}"#
+        let provider = makeProvider(OpenAIMockHTTPClient(responses: [.json(403, body)]))
+        do {
+            _ = try await provider.fetchStatus(account: OpenAIFixtures.account, credential: credential)
+            XCTFail("expected forbidden")
+        } catch UsageError.forbidden(let reason) {
+            XCTAssertEqual(reason, "This organization does not allow this client.")
+        } catch {
+            XCTFail("got \(error)")
+        }
+    }
+
+    func test403WithUnrelatedJSONErrorIsNeedsLogin() async {
+        let body = #"{"error":{"type":"invalid_request_error","message":"bad"}}"#
+        let provider = makeProvider(OpenAIMockHTTPClient(responses: [.json(403, body)]))
+        await assertThrows(needsLogin: { try await provider.fetchStatus(account: OpenAIFixtures.account, credential: self.credential) })
+    }
+
     func test429CarriesRetryAfter() async {
         let provider = makeProvider(OpenAIMockHTTPClient(responses: [
             .response(429, headers: ["Retry-After": "120"], body: "slow down"),

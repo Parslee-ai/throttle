@@ -89,6 +89,44 @@ final class BackoffPolicyTests: XCTestCase {
         XCTAssertNil(horizon(policy, a, .anthropic))
     }
 
+    // MARK: Forbidden hold (D-33)
+
+    func testForbiddenArmsA24HourHoldForThatAccountOnly() {
+        var policy = BackoffPolicy()
+        let until = policy.record(outcome: .forbidden, for: a, provider: .anthropic, now: t0)
+        XCTAssertEqual(until?.timeIntervalSince(t0), BackoffPolicy.forbiddenHold)
+        XCTAssertEqual(BackoffPolicy.forbiddenHold, 86_400)
+        XCTAssertEqual(horizon(policy, a, .anthropic), 86_400)
+        XCTAssertEqual(policy.forbiddenUntil(account: a, now: t0), until)
+        XCTAssertNil(horizon(policy, b, .anthropic), "a sibling account is not held")
+        XCTAssertNil(policy.rateLimitedUntil(account: a, provider: .anthropic, now: t0), "a hold is not a rate limit")
+        XCTAssertNil(policy.shouldSkip(account: a, provider: .anthropic, now: t0.addingTimeInterval(86_401)))
+    }
+
+    func testForbiddenDoesNotDouble() {
+        var policy = BackoffPolicy()
+        policy.record(outcome: .forbidden, for: a, provider: .anthropic, now: t0)
+        let again = policy.record(outcome: .forbidden, for: a, provider: .anthropic, now: t0.addingTimeInterval(10))
+        XCTAssertEqual(again?.timeIntervalSince(t0), 86_410)
+    }
+
+    func testSuccessClearsTheForbiddenHold() {
+        var policy = BackoffPolicy()
+        policy.record(outcome: .forbidden, for: a, provider: .anthropic, now: t0)
+        policy.record(outcome: .success, for: a, provider: .anthropic, now: t0)
+        XCTAssertNil(horizon(policy, a, .anthropic))
+        XCTAssertNil(policy.forbiddenUntil(account: a, now: t0))
+    }
+
+    func testClearHorizonLeavesTheForbiddenHold() {
+        var policy = BackoffPolicy()
+        policy.record(outcome: .forbidden, for: a, provider: .anthropic, now: t0)
+        policy.record(outcome: .rateLimited(retryAfter: 3_600), for: b, provider: .anthropic, now: t0)
+        policy.clearHorizon(provider: .anthropic, accounts: [a, b])
+        XCTAssertEqual(horizon(policy, a, .anthropic), 86_400, "retry-now does not lift a forbidden hold")
+        XCTAssertNil(horizon(policy, b, .anthropic))
+    }
+
     func testShouldSkipReturnsTheLatestApplicableHorizon() {
         var policy = BackoffPolicy()
         policy.record(outcome: .failure, for: a, provider: .anthropic, now: t0)                    // +60

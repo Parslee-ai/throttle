@@ -78,8 +78,49 @@ final class AnthropicProviderTests: XCTestCase {
         }
     }
 
-    func testForbiddenIsNeedsLogin() async {
+    func testForbiddenWithoutAPermissionBodyIsNeedsLogin() async {
         await assertThrows(AnthropicMockHTTPClient(status: 403, body: Data("{}".utf8))) { error in
+            guard case UsageError.needsLogin = error else { return XCTFail("got \(error)") }
+        }
+    }
+
+    func testForbiddenWithNonJSONBodyIsNeedsLogin() async {
+        let html = Data("<html><body>Access denied</body></html>".utf8)
+        await assertThrows(AnthropicMockHTTPClient(status: 403, body: html)) { error in
+            guard case UsageError.needsLogin = error else { return XCTFail("got \(error)") }
+        }
+    }
+
+    /// D-33: the organization refusing this OAuth client is its own error,
+    /// carrying the provider's message, not a login problem.
+    func testForbiddenWithPermissionErrorIsForbiddenWithReason() async {
+        let body = Data(#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization"}}}"#.utf8)
+        await assertThrows(AnthropicMockHTTPClient(status: 403, body: body)) { error in
+            guard case UsageError.forbidden(let reason) = error else { return XCTFail("got \(error)") }
+            XCTAssertEqual(reason, "OAuth authentication is currently not allowed for this organization.")
+        }
+    }
+
+    func testForbiddenWithErrorCodeButNoMessageIsForbidden() async {
+        let body = Data(#"{"type":"error","error":{"type":"something_new","details":{"error_code":"oauth_not_allowed_for_organization"}}}"#.utf8)
+        await assertThrows(AnthropicMockHTTPClient(status: 403, body: body)) { error in
+            guard case UsageError.forbidden(let reason) = error else { return XCTFail("got \(error)") }
+            XCTAssertEqual(reason, "Not allowed by organization (oauth_not_allowed_for_organization)")
+        }
+    }
+
+    func testForbiddenReasonIsRedacted() async {
+        let body = Data(#"{"type":"error","error":{"type":"permission_error","message":"Denied for Bearer sk-ant-oat01-secret-value-1234567890"}}"#.utf8)
+        await assertThrows(AnthropicMockHTTPClient(status: 403, body: body)) { error in
+            guard case UsageError.forbidden(let reason) = error else { return XCTFail("got \(error)") }
+            XCTAssertFalse(reason.contains("secret"), reason)
+            XCTAssertTrue(reason.contains("[redacted]"), reason)
+        }
+    }
+
+    func testOtherErrorTypesOn403AreStillNeedsLogin() async {
+        let body = Data(#"{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}"#.utf8)
+        await assertThrows(AnthropicMockHTTPClient(status: 403, body: body)) { error in
             guard case UsageError.needsLogin = error else { return XCTFail("got \(error)") }
         }
     }

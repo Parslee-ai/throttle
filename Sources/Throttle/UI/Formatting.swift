@@ -160,6 +160,8 @@ enum Formatting {
                 segments: [BarSegment(text: "⏳ retry \(clockTime(until))", band: .warning)],
                 dimmed: false
             )
+        case .forbidden:
+            return BarLabel(symbolName: symbol, email: email, segments: [BarSegment(text: "🔒 org policy", band: .warning)], dimmed: false)
         case .ok, .error:
             break
         }

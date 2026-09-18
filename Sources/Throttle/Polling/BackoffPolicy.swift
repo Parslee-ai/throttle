@@ -17,6 +17,13 @@ import Foundation
 ///   60 s doubling on each consecutive failure to a 15 min cap, reset by the
 ///   next success.
 ///
+/// - **Per-account forbidden hold (D-33).** A 403 that says the organization
+///   does not allow this client arms a fixed 24 h horizon for that account
+///   only. Nothing the app can do changes the answer, and repeating the
+///   request is what earns the secondary 429, so the hold is long, does not
+///   double, and is not cleared by the retry-now override. Only a success
+///   (or removing the account) ends it early.
+///
 /// `needsLogin` arms nothing: the account is retried each cycle so that a
 /// re-login takes effect on the next pass, and the request is cheap.
 struct BackoffPolicy: Hashable, Sendable {
@@ -29,6 +36,8 @@ struct BackoffPolicy: Hashable, Sendable {
         case failure
         /// Auth rejected. No backoff, no reset.
         case needsLogin
+        /// The organization refuses this client. A 24 h per-account hold.
+        case forbidden
     }
 
     /// Schedule for 429 without `Retry-After`: 5 min doubling to 60 min.
@@ -37,6 +46,8 @@ struct BackoffPolicy: Hashable, Sendable {
     /// Schedule for errors: 60 s doubling to 15 min.
     static let errorBase: TimeInterval = 60
     static let errorCap: TimeInterval = 900
+    /// Hold after a permission refusal: 24 h, per account, no doubling.
+    static let forbiddenHold: TimeInterval = 86_400
 
     private var providerRateLimitUntil: [Provider: Date] = [:]
     private var providerRateLimitStreak: [Provider: Int] = [:]
@@ -44,6 +55,7 @@ struct BackoffPolicy: Hashable, Sendable {
     private var accountRateLimitStreak: [UUID: Int] = [:]
     private var accountErrorUntil: [UUID: Date] = [:]
     private var accountErrorStreak: [UUID: Int] = [:]
+    private var accountForbiddenUntil: [UUID: Date] = [:]
 
     init() {}
 
@@ -54,6 +66,7 @@ struct BackoffPolicy: Hashable, Sendable {
             providerRateLimitUntil[provider],
             accountRateLimitUntil[account],
             accountErrorUntil[account],
+            accountForbiddenUntil[account],
         ].compactMap { $0 }.filter { $0 > now }
         return horizons.max()
     }
@@ -81,6 +94,7 @@ struct BackoffPolicy: Hashable, Sendable {
             accountRateLimitStreak[account] = nil
             accountErrorUntil[account] = nil
             accountErrorStreak[account] = nil
+            accountForbiddenUntil[account] = nil
             return nil
 
         case .rateLimited(let retryAfter):
@@ -108,14 +122,28 @@ struct BackoffPolicy: Hashable, Sendable {
 
         case .needsLogin:
             return nil
+
+        case .forbidden:
+            let until = now.addingTimeInterval(Self.forbiddenHold)
+            accountForbiddenUntil[account] = until
+            return until
         }
+    }
+
+    /// The active forbidden hold for this account, if any. Lets the scheduler
+    /// keep the row's forbidden state while it skips the account.
+    func forbiddenUntil(account: UUID, now: Date) -> Date? {
+        guard let until = accountForbiddenUntil[account], until > now else { return nil }
+        return until
     }
 
     /// Drops the provider-wide rate-limit horizon and its doubling streak,
     /// plus the per-account rate-limit horizons of the given accounts (the
     /// scope OpenAI uses). The user's "retry now" override: the next cycle
     /// fetches these accounts whatever `Retry-After` said. Error backoff is
-    /// left alone; it is short and not what the override is for.
+    /// left alone; it is short and not what the override is for. A forbidden
+    /// hold is left alone too: the provider's answer will not have changed,
+    /// and one more request is what earns the 429 (D-33).
     mutating func clearHorizon(provider: Provider, accounts: [UUID] = []) {
         providerRateLimitUntil[provider] = nil
         providerRateLimitStreak[provider] = nil

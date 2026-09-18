@@ -115,6 +115,13 @@ struct AccountRow: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .help("\(account.provider.displayName) limits how often usage can be read. This is not your plan's quota; the next check runs at \(Formatting.clockTime(until)).")
+            case .forbidden(let reason):
+                // The organization refuses this client. No re-login button:
+                // it would not change the answer (D-33).
+                Label("Not allowed by organization", systemImage: "lock.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(reason + " Throttle checks again in 24 hours or after you remove and re-add the account.")
             case .error(let message):
                 Label(message, systemImage: "exclamationmark.circle")
                     .font(.caption)

@@ -380,6 +380,105 @@ final class PollSchedulerTests: XCTestCase {
         XCTAssertTrue(f.clock.recordedSleeps.allSatisfy { $0.interval != 2 }, "a skipped account adds no stagger")
     }
 
+    // MARK: Forbidden by organization (D-33)
+
+    private let orgRefusal = "OAuth authentication is currently not allowed for this organization."
+
+    func testForbiddenIsItsOwnStateAndHoldsOnlyThatAccountFor24Hours() async throws {
+        let f = makeFixture()
+        let held = try await f.addAccount(.anthropic, email: "held@example.com")
+        let sibling = try await f.addAccount(.anthropic, email: "sibling@example.com")
+        f.anthropic.script([.succeed(usedPercent: 70), .fail(.forbidden(reason: orgRefusal))], for: held)
+
+        await f.scheduler.start()
+        await f.clock.advance(by: 10)
+        await f.waitForCycles(1)
+        await f.clock.advance(by: 300)
+        await f.waitForCycles(2)
+
+        let entry = try await f.requireEntry(held)
+        XCTAssertEqual(entry.status.state, .forbidden(orgRefusal))
+        XCTAssertEqual(entry.lastError, orgRefusal)
+        XCTAssertEqual(entry.status.windows.first?.usedPercent, 70, "the last good windows are kept")
+        XCTAssertTrue(entry.isStale)
+        let holdUntil = entry.lastAttempt.addingTimeInterval(BackoffPolicy.forbiddenHold)
+        XCTAssertEqual(entry.nextAttemptAt, holdUntil)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 2)
+        XCTAssertEqual(f.anthropic.fetchCount(for: sibling), 2)
+
+        for cycle in 3...5 {
+            await f.clock.advance(by: 300)
+            await f.waitForCycles(cycle)
+        }
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 2, "a held account is not fetched")
+        XCTAssertEqual(f.anthropic.fetchCount(for: sibling), 5, "the hold is per account, not provider-wide")
+        let skipped = try await f.requireEntry(held)
+        XCTAssertEqual(skipped.status.state, .forbidden(orgRefusal), "skipping keeps the forbidden state on the row")
+        XCTAssertEqual(skipped.nextAttemptAt, holdUntil)
+
+        await f.scheduler.refreshNow()
+        await f.waitForCycles(6)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 2, "refreshNow honours the hold")
+    }
+
+    func testRetryProviderLeavesAForbiddenAccountHeld() async throws {
+        let f = makeFixture()
+        let held = try await f.addAccount(.anthropic, email: "held@example.com")
+        let limited = try await f.addAccount(.anthropic, email: "limited@example.com")
+        f.anthropic.setBehavior(.fail(.forbidden(reason: orgRefusal)), for: held)
+        f.anthropic.script([.fail(.rateLimited(retryAfter: 3_600)), .succeed(usedPercent: 5)], for: limited)
+
+        await f.scheduler.start()
+        await f.clock.advance(by: 10)
+        await f.waitForCycles(1)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 1)
+        XCTAssertEqual(f.anthropic.fetchCount(for: limited), 1)
+
+        // Under the provider-wide 429 the held row still says forbidden.
+        await f.clock.advance(by: 300)
+        await f.waitForCycles(2)
+        let underThrottle = try await f.requireEntry(held)
+        XCTAssertEqual(underThrottle.status.state, .forbidden(orgRefusal))
+
+        await f.scheduler.retryProvider(.anthropic)
+        await f.clock.advance(by: 10)
+        await f.waitForCycles(3)
+        XCTAssertEqual(f.anthropic.fetchCount(for: limited), 2, "the override lifts the rate-limit horizon")
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 1, "the override does not lift a forbidden hold")
+        let limitedEntry = try await f.requireEntry(limited)
+        XCTAssertEqual(limitedEntry.status.state, .ok)
+        let heldEntry = try await f.requireEntry(held)
+        XCTAssertEqual(heldEntry.status.state, .forbidden(orgRefusal))
+    }
+
+    func testForbiddenHoldEndsAfter24HoursAndASuccessClearsIt() async throws {
+        let f = makeFixture(PollSettings(pollInterval: 1_800))
+        let held = try await f.addAccount(.anthropic, email: "held@example.com")
+        f.anthropic.script([.fail(.forbidden(reason: orgRefusal)), .succeed(usedPercent: 3)], for: held)
+
+        await f.scheduler.start()
+        await f.waitForCycles(1)
+        let first = try await f.requireEntry(held)
+        XCTAssertEqual(first.status.state, .forbidden(orgRefusal))
+
+        // 47 half-hour ticks land inside the hold; the 48th is past it.
+        await f.clock.advance(by: BackoffPolicy.forbiddenHold - 1_800)
+        await f.waitForCycles(48)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 1, "no fetch inside the hold")
+
+        await f.clock.advance(by: 1_800)
+        await f.waitForCycles(49)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 2)
+        let entry = try await f.requireEntry(held)
+        XCTAssertEqual(entry.status.state, .ok)
+        XCTAssertEqual(entry.status.windows.first?.usedPercent, 3)
+        XCTAssertNil(entry.nextAttemptAt)
+
+        await f.clock.advance(by: 1_800)
+        await f.waitForCycles(50)
+        XCTAssertEqual(f.anthropic.fetchCount(for: held), 3, "the hold is gone after the success")
+    }
+
     // MARK: Refresh now (ISC-101)
 
     func testRefreshNowRunsACycleImmediatelyAndRespectsBackoff() async throws {

@@ -48,7 +48,7 @@ final class StatusCachePersistenceTests: XCTestCase {
     }
 
     func testEveryAccountStateRoundTrips() throws {
-        for state in [AccountState.ok, .needsLogin, .rateLimited(until: clock.now()), .error("Timed out after 15 s")] {
+        for state in [AccountState.ok, .needsLogin, .rateLimited(until: clock.now()), .error("Timed out after 15 s"), .forbidden("OAuth authentication is currently not allowed for this organization.")] {
             let original = entry(percent: 10, at: clock.now(), state: state)
             let decoded = try StatusCachePersistence.decode(try StatusCachePersistence.encode([account.id: original]))
             XCTAssertEqual(decoded[account.id]?.status.state, state)
