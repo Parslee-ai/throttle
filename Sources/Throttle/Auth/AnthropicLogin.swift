@@ -7,7 +7,11 @@ import Foundation
 /// user pastes it into Throttle. The paste page is the always-available
 /// fallback because loopback acceptance for this client is unproven (D-21).
 struct AnthropicLogin: OAuthLogin {
-    static let authorizeURL = URL(string: "https://platform.claude.com/oauth/authorize")!
+    /// The Claude *subscription* authorize page (Claude Code's `CLAUDE_AI_AUTHORIZE_URL`).
+    /// The console page at `platform.claude.com/oauth/authorize` is for API
+    /// organizations: it grants only `user:profile`, and the usage endpoint then
+    /// answers 403 "not allowed for this organization" (ISA D-34).
+    static let authorizeURL = URL(string: "https://claude.com/cai/oauth/authorize")!
     /// Primary token endpoint for the code exchange.
     static let tokenURL = AnthropicEndpoints.tokenFallback
     /// Tried once when the primary answers 400 (ISC-59).
@@ -15,7 +19,7 @@ struct AnthropicLogin: OAuthLogin {
     static let manualRedirectURI = "https://platform.claude.com/oauth/code/callback"
     static let loopbackPath = "/callback"
     static let defaultPorts: [UInt16] = [1456, 1458]
-    static let scope = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
+    static let scope = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
     static let fallbackEmail = "Claude account"
 
     private let client: HTTPClient

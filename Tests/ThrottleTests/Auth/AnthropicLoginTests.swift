@@ -46,8 +46,8 @@ final class AnthropicLoginTests: XCTestCase {
 
         let url = session.authorizeURL
         XCTAssertEqual(url.scheme, "https")
-        XCTAssertEqual(url.host, "platform.claude.com")
-        XCTAssertEqual(url.path, "/oauth/authorize")
+        XCTAssertEqual(url.host, "claude.com")
+        XCTAssertEqual(url.path, "/cai/oauth/authorize")
 
         let query = AuthTestSupport.query(url)
         XCTAssertEqual(query.map(\.0), [
