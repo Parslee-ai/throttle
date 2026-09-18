@@ -132,7 +132,7 @@ final class FormattingTests: XCTestCase {
 
         let forbidden = UIFixtures.cached(for: account, windows: [], state: .forbidden("OAuth authentication is currently not allowed for this organization."))
         let forbiddenLabel = Formatting.barLabel(account: account, cached: forbidden, showRemaining: false, now: now)
-        XCTAssertEqual(forbiddenLabel.segments.map(\.text), ["🔒 org policy"])
+        XCTAssertEqual(forbiddenLabel.segments.map(\.text), ["🔒 sign in again"])
         XCTAssertEqual(forbiddenLabel.segments.first?.band, .warning)
         XCTAssertFalse(forbiddenLabel.dimmed)
         XCTAssertFalse(forbiddenLabel.plainText.contains("organization"), "the provider's message stays out of the bar")

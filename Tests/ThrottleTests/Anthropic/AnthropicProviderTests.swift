@@ -14,7 +14,7 @@ final class AnthropicProviderTests: XCTestCase {
             refreshToken: AnthropicSampleSecret.refreshToken,
             expiresAt: fixedNow.addingTimeInterval(3600),
             accountID: "acct_test",
-            scopes: ["user:profile"]
+            scopes: ["user:profile", "user:inference"]
         )
     }
 
@@ -260,7 +260,7 @@ final class AnthropicProviderTests: XCTestCase {
         let client = AnthropicMockHTTPClient(status: 200, body: Data(body.utf8))
         let rotated = try await makeProvider(client).refresh(credential: credential)
         XCTAssertEqual(rotated.refreshToken, AnthropicSampleSecret.refreshToken)
-        XCTAssertEqual(rotated.scopes, ["user:profile"])
+        XCTAssertEqual(rotated.scopes, ["user:profile", "user:inference"])
         XCTAssertEqual(rotated.expiresAt, fixedNow.addingTimeInterval(3600))
     }
 
@@ -340,5 +340,30 @@ final class AnthropicProviderTests: XCTestCase {
                 XCTFail("check threw \(error)", file: file, line: line)
             }
         }
+    }
+}
+
+final class AnthropicConsoleTokenTests: XCTestCase {
+    /// A token minted by the API-console authorize page carries only
+    /// `user:profile`. The adapter must not spend a request on it (D-34).
+    func testConsoleTokenIsRefusedWithoutARequest() async {
+        let client = AnthropicMockHTTPClient()
+        let provider = AnthropicProvider(client: client)
+        let account = Account(provider: .anthropic, email: "a@example.com", sortIndex: 0)
+        let credential = AccountCredential(accessToken: "t", scopes: ["user:profile"])
+        do {
+            _ = try await provider.fetchStatus(account: account, credential: credential)
+            XCTFail("expected needsLogin")
+        } catch UsageError.needsLogin {
+            XCTAssertTrue(client.requests.isEmpty, "a console token must not reach the network")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    func testSubscriptionAndUnknownScopesAreNotConsoleTokens() {
+        XCTAssertFalse(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: ["user:profile", "user:inference"])))
+        XCTAssertFalse(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: [])))
+        XCTAssertTrue(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: ["user:profile"])))
     }
 }

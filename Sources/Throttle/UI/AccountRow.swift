@@ -102,7 +102,7 @@ struct AccountRow: View {
                 EmptyView()
             case .needsLogin:
                 HStack(spacing: 8) {
-                    Label("Needs login", systemImage: "exclamationmark.triangle")
+                    Label("Sign in again", systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
                     Button("Log in again", action: onReLogin)
@@ -116,12 +116,17 @@ struct AccountRow: View {
                     .foregroundStyle(.orange)
                     .help("\(account.provider.displayName) limits how often usage can be read. This is not your plan's quota; the next check runs at \(Formatting.clockTime(until)).")
             case .forbidden(let reason):
-                // The organization refuses this client. No re-login button:
-                // it would not change the answer (D-33).
-                Label("Not allowed by organization", systemImage: "lock.slash")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help(reason + " Throttle checks again in 24 hours or after you remove and re-add the account.")
+                // Anthropic answers this for a token minted by the API-console
+                // login page, which has no subscription usage to read (D-34).
+                // The fix is a fresh sign-in through the subscription page.
+                HStack(spacing: 8) {
+                    Label("Wrong sign-in type", systemImage: "lock.slash")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help(reason + " This token came from the API-console page. Sign in again to use the Claude subscription page.")
+                    Button("Sign in again", action: onReLogin)
+                        .controlSize(.small)
+                }
             case .error(let message):
                 Label(message, systemImage: "exclamationmark.circle")
                     .font(.caption)

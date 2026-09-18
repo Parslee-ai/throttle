@@ -161,7 +161,7 @@ enum Formatting {
                 dimmed: false
             )
         case .forbidden:
-            return BarLabel(symbolName: symbol, email: email, segments: [BarSegment(text: "🔒 org policy", band: .warning)], dimmed: false)
+            return BarLabel(symbolName: symbol, email: email, segments: [BarSegment(text: "🔒 sign in again", band: .warning)], dimmed: false)
         case .ok, .error:
             break
         }
