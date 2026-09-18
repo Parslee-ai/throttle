@@ -11,6 +11,10 @@ enum AccountState: Codable, Hashable, Sendable {
     case needsLogin
     /// The provider is rate limiting us until the given time.
     case rateLimited(until: Date)
+    /// The provider refuses this client for the account's organization. The
+    /// string is the provider's own message, already redacted for display. A
+    /// re-login does not help; the row offers none.
+    case forbidden(String)
     /// Anything else. The string is already redacted for display.
     case error(String)
 }

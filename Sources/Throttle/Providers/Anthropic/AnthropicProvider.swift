@@ -44,11 +44,20 @@ struct AnthropicProvider: UsageProvider {
                 fetchedAt: now(),
                 state: .ok
             )
-        case 401, 403:
-            // The body is the provider's error object, never a token; it is
-            // still redacted and capped before it reaches the log.
-            let reason = Redactor.redact(String(decoding: response.body.prefix(300), as: UTF8.self))
-            Self.logger.error("Usage rejected with HTTP \(response.statusCode, privacy: .public): \(reason, privacy: .public)")
+        case 401:
+            Self.logger.error("Usage rejected with HTTP 401: \(Self.snippet(response.body), privacy: .public)")
+            throw UsageError.needsLogin
+        case 403:
+            // A permission error is the organization refusing this client
+            // ("OAuth authentication is currently not allowed for this
+            // organization"). Logging in again cannot change that, and
+            // repeating the request earns a 429 (D-33). Any other 403 is
+            // treated as an auth problem, as before.
+            if let message = Self.permissionRefusal(in: response.body) {
+                Self.logger.error("Usage forbidden for this organization: \(message, privacy: .public)")
+                throw UsageError.forbidden(reason: message)
+            }
+            Self.logger.error("Usage rejected with HTTP 403: \(Self.snippet(response.body), privacy: .public)")
             throw UsageError.needsLogin
         case 429:
             let retry = retryAfter(from: response)
@@ -62,6 +71,36 @@ struct AnthropicProvider: UsageProvider {
     }
 
     private static let logger = Logger(subsystem: "ai.parslee.throttle", category: "AnthropicProvider")
+
+    /// The provider's message when a 403 body is a permission error, already
+    /// redacted, or `nil` when the body is anything else (not JSON, no
+    /// `error` object, or a different error type). The shape is
+    /// `{"type":"error","error":{"type":"permission_error","message":"…",
+    /// "details":{"error_code":"oauth_not_allowed_for_organization"}}}`; a
+    /// `details.error_code` counts even if the type name changes.
+    static func permissionRefusal(in body: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body),
+              let root = json as? [String: Any],
+              let error = root["error"] as? [String: Any] else {
+            return nil
+        }
+        let type = (error["type"] as? String) ?? ""
+        let details = error["details"] as? [String: Any]
+        let code = details?["error_code"] as? String
+        guard type == "permission_error" || code != nil else { return nil }
+        var message = (error["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if message.isEmpty {
+            message = code.map { "Not allowed by organization (\($0))" } ?? "Not allowed by organization"
+        }
+        return Redactor.redact(String(message.prefix(300)))
+    }
+
+    /// The first 300 bytes of an error body, redacted, for the log. The body
+    /// is the provider's error object, never a token, but it is redacted and
+    /// capped all the same.
+    private static func snippet(_ body: Data) -> String {
+        Redactor.redact(String(decoding: body.prefix(300), as: UTF8.self))
+    }
 
     // MARK: - Profile
 

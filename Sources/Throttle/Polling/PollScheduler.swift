@@ -190,7 +190,8 @@ actor PollScheduler {
     /// rate-limit horizon (and the per-account horizons of its accounts),
     /// writes the cleared state to disk so a relaunch does not restore it,
     /// and runs one cycle now. The provider may answer 429 again, in which
-    /// case a fresh horizon is armed from its `Retry-After`.
+    /// case a fresh horizon is armed from its `Retry-After`. A forbidden hold
+    /// (D-33) is not cleared: those accounts stay skipped.
     func retryProvider(_ provider: Provider) async {
         let accounts = await store.accounts().filter { $0.provider == provider }.map(\.id)
         backoff.clearHorizon(provider: provider, accounts: accounts)
@@ -405,7 +406,12 @@ actor PollScheduler {
         let attemptAt = clock.now()
 
         if let until = backoff.shouldSkip(account: account.id, provider: provider, now: attemptAt) {
-            let rateLimited = backoff.rateLimitedUntil(account: account.id, provider: provider, now: attemptAt) != nil
+            // A forbidden hold keeps its own state on the row even when a
+            // provider-wide 429 is also active; the refusal is the reason the
+            // account cannot be read, whatever the throttle does.
+            let forbidden = backoff.forbiddenUntil(account: account.id, now: attemptAt) != nil
+            let rateLimited = !forbidden
+                && backoff.rateLimitedUntil(account: account.id, provider: provider, now: attemptAt) != nil
             await cache.recordSkipped(account: account, until: until, rateLimited: rateLimited, at: attemptAt)
             settledThisCycle.insert(account.id)
             return false
@@ -468,6 +474,27 @@ actor PollScheduler {
                 markStale: true
             )
             await diagnose(account, provider: provider, at: now, message: "Marked needs-login")
+
+        case UsageError.forbidden(let reason):
+            // The provider already redacted `reason`; redact again here so the
+            // scheduler never depends on an adapter having done it.
+            let reason = Redactor.redact(reason)
+            let until = backoff.record(outcome: .forbidden, for: account.id, provider: provider, now: now)
+                ?? now.addingTimeInterval(BackoffPolicy.forbiddenHold)
+            await cache.recordFailure(
+                account: account,
+                state: .forbidden(reason),
+                error: reason,
+                at: attemptAt,
+                markStale: true,
+                nextAttemptAt: until
+            )
+            await diagnose(
+                account,
+                provider: provider,
+                at: now,
+                message: "Forbidden by organization; holding until \(until.formatted(.iso8601))"
+            )
 
         case UsageError.rateLimited(let retryAfter):
             let until = backoff.record(outcome: .rateLimited(retryAfter: retryAfter), for: account.id, provider: provider, now: now)

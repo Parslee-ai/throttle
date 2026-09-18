@@ -24,8 +24,14 @@ protocol UsageProvider: Sendable {
 /// Failures an adapter can report. The poll scheduler maps these onto
 /// `AccountState` and onto its backoff policy.
 enum UsageError: Error {
-    /// Auth was rejected (401/403 with auth semantics) or refresh failed.
+    /// Auth was rejected (401, or a 403 without a permission body) or refresh
+    /// failed. A re-login is the fix.
     case needsLogin
+    /// The provider refused this client for the account's organization (a 403
+    /// with a permission error). A re-login cannot fix it, and repeating the
+    /// request only earns a 429. `reason` is the provider's message, already
+    /// passed through `Redactor`.
+    case forbidden(reason: String)
     /// Provider asked us to wait. `retryAfter` comes from the response header.
     case rateLimited(retryAfter: TimeInterval?)
     /// The response was reachable but unusable; the string is a short reason.

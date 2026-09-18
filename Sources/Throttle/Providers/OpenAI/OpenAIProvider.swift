@@ -58,8 +58,13 @@ struct OpenAIProvider: UsageProvider {
             throw UsageError.needsLogin
         case 403:
             // A hard limit comes back as 403 with the normal usage body; the
-            // account is fine, it is just out of quota. Anything else is auth.
+            // account is fine, it is just out of quota. A JSON error whose
+            // type says permission or forbidden is the organization refusing
+            // this client (D-33). Anything else is auth.
             guard let parsed = try? OpenAIUsageParser.parse(response.body, now: fetchedAt) else {
+                if let message = Self.permissionRefusal(in: response.body) {
+                    throw UsageError.forbidden(reason: message)
+                }
                 throw UsageError.needsLogin
             }
             snapshot = parsed
@@ -180,6 +185,32 @@ struct OpenAIProvider: UsageProvider {
             + "&refresh_token=\(encodedToken)"
             + "&client_id=\(OpenAIEndpoints.clientID)"
             + "&scope=\(scope)"
+    }
+
+    /// The message from a 403 body that is a JSON error of a permission or
+    /// forbidden type (`{"error":{"type":"…","message":"…"}}` or the flat
+    /// `{"error":"…","error_description":"…"}` form), already redacted.
+    /// `nil` for anything else, so an unknown 403 still reads as needs-login.
+    static func permissionRefusal(in body: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body),
+              let root = json as? [String: Any] else {
+            return nil
+        }
+        let type: String
+        var message: String?
+        if let error = root["error"] as? [String: Any] {
+            type = ((error["type"] as? String) ?? (error["code"] as? String) ?? "").lowercased()
+            message = error["message"] as? String
+        } else if let error = root["error"] as? String {
+            type = error.lowercased()
+            message = (root["error_description"] as? String) ?? (root["message"] as? String)
+        } else {
+            return nil
+        }
+        guard type.contains("permission") || type.contains("forbidden") else { return nil }
+        var text = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty { text = "Not allowed by organization (\(type))" }
+        return Redactor.redact(String(text.prefix(300)))
     }
 
     private static func retryAfter(from response: HTTPResponse) -> TimeInterval? {
