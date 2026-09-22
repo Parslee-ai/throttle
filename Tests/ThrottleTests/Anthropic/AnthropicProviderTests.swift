@@ -249,31 +249,145 @@ final class AnthropicProviderTests: XCTestCase {
     /// A failed profile read is silent: the usage reading is unchanged and
     /// `.ok`, and the next poll tries the profile again.
     func testFailedProfileLeavesUsageAloneAndIsRetried() async throws {
+        let clock = MovableNow(fixedNow)
         let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
-        client.enqueue(status: 429, body: Data(#"{"error":"rate limited"}"#.utf8), headers: ["Retry-After": "3600"])
-        client.enqueue(status: 200, body: try usageBody())
         client.enqueue(error: UsageError.transport(URLError(.timedOut)))
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 503, body: Data(#"{"error":"overloaded"}"#.utf8))
+        client.enqueue(status: 200, body: try usageBody())
         client.enqueue(status: 200, body: try usageBody())
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: try usageBody())
-        let provider = makeProvider(client)
+        let provider = AnthropicProvider(client: client, now: { clock.now })
 
-        let failedWith429 = try await provider.fetchStatus(account: account, credential: credential)
-        XCTAssertEqual(failedWith429.state, .ok)
-        XCTAssertEqual(failedWith429.windows.map(\.key), ["5h", "7d", "scoped:Fable", "scoped:Claude Opus"])
-        XCTAssertNil(failedWith429.planLabel)
-
+        // A transport failure: usage is untouched, and the next poll retries.
         let failedInTransport = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(failedInTransport.state, .ok)
+        XCTAssertEqual(failedInTransport.windows.map(\.key), ["5h", "7d", "scoped:Fable", "scoped:Claude Opus"])
         XCTAssertNil(failedInTransport.planLabel)
 
+        // A 503 with no Retry-After: usage is untouched, and the profile
+        // waits an hour.
+        let refused = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(refused.state, .ok)
+        XCTAssertEqual(refused.windows.count, 4)
+        XCTAssertNil(refused.planLabel)
+
+        clock.advance(by: 59 * 60)
+        let held = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertNil(held.planLabel)
+
+        clock.advance(by: 2 * 60)
         let read = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(read.planLabel, "max 20x")
         let afterwards = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(afterwards.planLabel, "max 20x")
 
-        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 3, "retried after each failure, then never again")
-        XCTAssertEqual(client.requests.count, 7)
+        let u = AnthropicEndpoints.usage, p = AnthropicEndpoints.profile
+        XCTAssertEqual(client.requests.map(\.url), [u, p, u, p, u, u, p, u])
+    }
+
+    /// CLAUDE.md: a 429 honors `Retry-After`. A refused profile read is not
+    /// asked again, and writes no diagnostics line, until the wait passes.
+    func testProfile429WaitsForItsRetryAfter() async throws {
+        let clock = MovableNow(fixedNow)
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 429, body: Data(#"{"error":"rate limited"}"#.utf8), headers: ["Retry-After": "3600"])
+        for _ in 0..<3 { client.enqueue(status: 200, body: try usageBody()) }
+        client.enqueue(status: 200, body: try profileBody())
+        let provider = AnthropicProvider(client: client, now: { clock.now })
+
+        let first = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(first.state, .ok)
+        XCTAssertNil(first.planLabel)
+
+        clock.advance(by: 600)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        clock.advance(by: 2_999)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 1, "held for the whole Retry-After")
+
+        clock.advance(by: 2)
+        let after = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(after.planLabel, "max 20x")
+        let u = AnthropicEndpoints.usage, p = AnthropicEndpoints.profile
+        XCTAssertEqual(client.requests.map(\.url), [u, p, u, u, u, p])
+    }
+
+    /// A new sign-in replaces what the adapter remembered: the plan read with
+    /// the old sign-in, and any wait on the profile.
+    func testSignInForgetsThePlanAndAnyWait() async throws {
+        let clock = MovableNow(fixedNow)
+        let pro = Data(#"{"account":{"email":"user@example.com"},"organization":{"organization_type":"claude_pro"}}"#.utf8)
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: pro)
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 429, headers: ["Retry-After": "3600"])
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        let provider = AnthropicProvider(client: client, now: { clock.now })
+
+        let before = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(before.planLabel, "max 20x")
+
+        await provider.accountDidSignIn(account.id)
+        let after = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(after.planLabel, "pro", "the cached plan from the old sign-in is not written back")
+
+        await provider.accountDidSignIn(account.id)
+        let refused = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertNil(refused.planLabel)
+        await provider.accountDidSignIn(account.id)
+        let again = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(again.planLabel, "max 20x", "a sign-in also clears a wait")
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 4)
+    }
+
+    /// The registry hands out copies of one adapter. They share what it
+    /// remembers, so the sign-in the app reports through one copy reaches the
+    /// copy the scheduler polls with.
+    func testRegistryCopiesShareProfileMemory() async throws {
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        let registry = ProviderRegistry(client: client)
+        let polling = try XCTUnwrap(registry.usageProviders[.anthropic])
+
+        _ = try await polling.fetchStatus(account: account, credential: credential)
+        _ = try await registry.usageProvider(for: .anthropic).fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 1)
+
+        await registry.usageProvider(for: .anthropic).accountDidSignIn(account.id)
+        _ = try await polling.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 2)
+    }
+
+    /// The profile read never outlasts the scheduler's budget for the fetch:
+    /// with little time left it is cut short, with none left it is skipped.
+    func testProfileReadStaysInsideTheFetchBudget() async throws {
+        let client = SlowProfileClient(usage: try usageBody(), profile: try profileBody(), profileDelay: 30)
+        let provider = AnthropicProvider(client: client, now: { [fixedNow] in fixedNow })
+
+        let deadline = Date().addingTimeInterval(1.2)
+        let started = Date()
+        let status = try await FetchBudget.$remaining.withValue({ deadline.timeIntervalSinceNow }) {
+            try await provider.fetchStatus(account: account, credential: credential)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.2 - AnthropicProvider.profileMargin + 0.3)
+        XCTAssertEqual(status.state, .ok)
+        XCTAssertEqual(status.windows.count, 4)
+        XCTAssertNil(status.planLabel)
+        XCTAssertEqual(client.profileRequests, 1)
+
+        let skipped = try await FetchBudget.$remaining.withValue({ AnthropicProvider.profileMargin - 0.1 }) {
+            try await provider.fetchStatus(account: account, credential: credential)
+        }
+        XCTAssertEqual(skipped.state, .ok)
+        XCTAssertEqual(client.profileRequests, 1, "no time left: no profile request at all")
     }
 
     /// A profile that does not answer within the budget is abandoned: the
@@ -469,18 +583,20 @@ final class AnthropicConsoleTokenTests: XCTestCase {
     }
 }
 
-/// Answers usage at once and the profile after `profileDelay` seconds,
-/// honoring cancellation the way `URLSession` does.
-private final class SlowProfileClient: HTTPClient, @unchecked Sendable {
+/// Answers usage after `usageDelay` seconds and the profile after
+/// `profileDelay` seconds, honoring cancellation the way `URLSession` does.
+final class SlowProfileClient: HTTPClient, @unchecked Sendable {
     private let lock = NSLock()
     private let usage: Data
     private let profile: Data
+    private let usageDelay: TimeInterval
     private var delay: TimeInterval
     private var profileCount = 0
 
-    init(usage: Data, profile: Data, profileDelay: TimeInterval) {
+    init(usage: Data, profile: Data, usageDelay: TimeInterval = 0, profileDelay: TimeInterval) {
         self.usage = usage
         self.profile = profile
+        self.usageDelay = usageDelay
         self.delay = profileDelay
     }
 
@@ -496,6 +612,7 @@ private final class SlowProfileClient: HTTPClient, @unchecked Sendable {
 
     func send(_ request: URLRequest, maxBodyBytes: Int) async throws -> HTTPResponse {
         guard request.url == AnthropicEndpoints.profile else {
+            try await pause(usageDelay)
             return HTTPResponse(statusCode: 200, headers: [:], body: usage)
         }
         let wait: TimeInterval = {
@@ -503,13 +620,35 @@ private final class SlowProfileClient: HTTPClient, @unchecked Sendable {
             profileCount += 1
             return delay
         }()
-        if wait > 0 {
-            do {
-                try await Task.sleep(for: .seconds(wait))
-            } catch {
-                throw UsageError.transport(URLError(.cancelled))
-            }
-        }
+        try await pause(wait)
         return HTTPResponse(statusCode: 200, headers: [:], body: profile)
+    }
+
+    private func pause(_ seconds: TimeInterval) async throws {
+        guard seconds > 0 else { return }
+        do {
+            try await Task.sleep(for: .seconds(seconds))
+        } catch {
+            throw UsageError.transport(URLError(.cancelled))
+        }
+    }
+}
+
+/// A `now` the test moves by hand.
+final class MovableNow: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ start: Date) {
+        value = start
+    }
+
+    var now: Date {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock(); value = value.addingTimeInterval(seconds); lock.unlock()
     }
 }

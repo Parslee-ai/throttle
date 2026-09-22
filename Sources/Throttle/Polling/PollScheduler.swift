@@ -432,10 +432,17 @@ actor PollScheduler {
         let timeout = settings.perAccountTimeout
         let store = store
         let resolver = resolver
+        let clock = clock
+        let deadline = clock.now().addingTimeInterval(timeout)
+        let remaining: @Sendable () -> TimeInterval = { deadline.timeIntervalSince(clock.now()) }
         do {
             let status = try await withTimeout(timeout) {
-                let credential = try await resolver.validCredential(for: account, from: store, using: adapter)
-                return try await adapter.fetchStatus(account: account, credential: credential)
+                // Bound inside the timed work, which runs detached and would
+                // not inherit it from here.
+                try await FetchBudget.$remaining.withValue(remaining) {
+                    let credential = try await resolver.validCredential(for: account, from: store, using: adapter)
+                    return try await adapter.fetchStatus(account: account, credential: credential)
+                }
             }
             backoff.record(outcome: .success, for: account.id, provider: provider, now: clock.now())
             persistBackoffIfChanged()
