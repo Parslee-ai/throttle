@@ -56,16 +56,22 @@ only when you click it, never on its own. If a newer release is out, click
 
 1. downloads that release's signed installer package from this repository's
    GitHub Releases,
-2. verifies the package is signed by the same developer as the copy of Throttle
-   you are running, and notarized by Apple,
+2. verifies it: the exact size and SHA-256 checksum GitHub lists for it, a
+   signature from the same developer as the copy of Throttle you are running,
+   Apple's notarization, and that it is a Throttle package of exactly that
+   version with no install scripts,
 3. asks for your administrator password with the standard macOS prompt,
-4. installs the update and relaunches.
+4. copies the package somewhere only the administrator can write, checks that
+   copy all over again against the same exact bytes, product and version, and
+   only then installs it,
+5. relaunches.
 
 If you cancel the password prompt, nothing changes and you can install again
-later. If the install fails, Throttle offers to open the verified package in
-Installer so you can finish by hand. Builds that are not signed with a Developer
-ID (built from source, or unsigned releases) cannot verify an update, so they
-say so; download new versions from the Releases page instead.
+later. If anything fails, the downloaded package is deleted and **Try Again**
+starts over with a fresh download that is verified from scratch. Builds that
+are not signed with a Developer ID (built from source, or unsigned releases)
+cannot verify an update, so they say so; download new versions from the
+Releases page instead.
 
 ## Adding accounts
 
