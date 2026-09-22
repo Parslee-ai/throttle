@@ -28,6 +28,14 @@ struct AnthropicProvider: UsageProvider {
     /// `Retry-After`.
     static let profileRefusalHold: TimeInterval = 3600
 
+    /// The wait after a refused profile read: the answer's `Retry-After`,
+    /// kept within 0…60 minutes like every other backoff, or an hour when the
+    /// value is missing or not a finite number.
+    static func profileHold(retryAfter: TimeInterval?) -> TimeInterval {
+        guard let retryAfter, retryAfter.isFinite else { return profileRefusalHold }
+        return min(max(retryAfter, 0), profileRefusalHold)
+    }
+
     init(
         client: HTTPClient = URLSessionHTTPClient(),
         now: @escaping @Sendable () -> Date = Date.init,
@@ -206,7 +214,7 @@ struct AnthropicProvider: UsageProvider {
             await plans.remember(profile.planLabel, for: account.id)
             return profile.planLabel
         case .answered(.refused(let retryAfter)):
-            await plans.hold(account.id, until: started.addingTimeInterval(retryAfter ?? Self.profileRefusalHold))
+            await plans.hold(account.id, until: started.addingTimeInterval(Self.profileHold(retryAfter: retryAfter)))
             return nil
         case .failed, .outOfTime:
             return nil

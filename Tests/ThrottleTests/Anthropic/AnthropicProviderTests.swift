@@ -652,3 +652,21 @@ final class MovableNow: @unchecked Sendable {
         lock.lock(); value = value.addingTimeInterval(seconds); lock.unlock()
     }
 }
+
+/// A refused profile read waits at most as long as any other backoff: the
+/// hour CLAUDE.md caps it at.
+final class AnthropicProfileHoldTests: XCTestCase {
+    func testHoldHonorsRetryAfterWithinAnHour() {
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: 120), 120)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: 3600), 3600)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: 0), 0)
+    }
+
+    func testHoldIsClampedAndFallsBackToAnHour() {
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: 86_400), 3600)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: -5), 0)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: .infinity), 3600)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: .nan), 3600)
+        XCTAssertEqual(AnthropicProvider.profileHold(retryAfter: nil), 3600)
+    }
+}
