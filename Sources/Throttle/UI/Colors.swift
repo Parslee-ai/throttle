@@ -34,7 +34,7 @@ enum Swatch: CaseIterable, Sendable {
         case .track: return 0x2E2D2B
         case .criticalTrack: return 0x7A2B2A
         case .divider: return 0x2A2927
-        case .quietText: return 0x525150
+        case .quietText: return 0x7F7E7C
         }
     }
 
@@ -48,7 +48,7 @@ enum Swatch: CaseIterable, Sendable {
         case .track: return 0xE4E3E0
         case .criticalTrack: return 0xDF7774
         case .divider: return 0xE7E6E3
-        case .quietText: return 0x86847F
+        case .quietText: return 0x737270
         }
     }
 

@@ -105,12 +105,18 @@ final class ColorsTests: XCTestCase {
         XCTAssertLessThan(green, 0xA0, "dark enough to read as red, not pink")
     }
 
-    /// Quiet text keeps at least 3:1 contrast against the light background.
-    func testQuietTextContrastInLightMode() throws {
+    /// Quiet text is body-size, so it keeps 4.5:1 against the light background
+    /// and at least 4:1 against the dark one, where it sits a step below the
+    /// secondary text as in the reference.
+    func testQuietTextContrast() throws {
         let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        let text = hex(Swatch.quietText.nsColor, in: light)
-        let background = hex(Swatch.windowBackground.nsColor, in: light)
-        XCTAssertGreaterThanOrEqual(contrast(text, background), 3.0)
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        let lightText = hex(Swatch.quietText.nsColor, in: light)
+        let lightBackground = hex(Swatch.windowBackground.nsColor, in: light)
+        XCTAssertGreaterThanOrEqual(contrast(lightText, lightBackground), 4.5)
+        let darkText = hex(Swatch.quietText.nsColor, in: dark)
+        let darkBackground = hex(Swatch.windowBackground.nsColor, in: dark)
+        XCTAssertGreaterThanOrEqual(contrast(darkText, darkBackground), 4.0)
     }
 
     private func contrast(_ a: UInt32, _ b: UInt32) -> Double {
@@ -136,7 +142,7 @@ final class ColorsTests: XCTestCase {
             .track: (0x2E2D2B, 0xE4E3E0),
             .criticalTrack: (0x7A2B2A, 0xDF7774),
             .divider: (0x2A2927, 0xE7E6E3),
-            .quietText: (0x525150, 0x86847F),
+            .quietText: (0x7F7E7C, 0x737270),
         ]
         XCTAssertEqual(Set(expected.keys), Set(Swatch.allCases))
         let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
