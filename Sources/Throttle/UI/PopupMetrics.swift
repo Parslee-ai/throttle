@@ -7,9 +7,9 @@ enum PopupMetrics {
     /// Left and right inset of headers, rows, and the footer.
     static let horizontalPadding: CGFloat = 22
     /// The account name, plan, and state column.
-    static let identityWidth: CGFloat = 200
+    static let identityWidth: CGFloat = 210
     /// Where the first window column starts, from the window's left edge.
-    static let columnsLeading: CGFloat = 240
+    static let columnsLeading: CGFloat = 246
     static let columnWidth: CGFloat = 224
     static let columnGap: CGFloat = 18
     /// Columns per line; more windows wrap onto another line of columns.

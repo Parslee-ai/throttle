@@ -272,6 +272,22 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(label.plainText, "4: 5h 5%")
     }
 
+    /// A stale reading dims the label, but a window at 0% keeps its red.
+    func testStaleLabelAtZeroPercentKeepsItsRedSegment() {
+        let account = UIFixtures.account("me@example.com")
+        let cached = UIFixtures.cached(for: account, windows: [
+            UIFixtures.window("5h", label: "5h", used: 40),
+            UIFixtures.window("7d", label: "Weekly", used: 100),
+        ], isStale: true)
+        let label = Formatting.barLabel(account: account, index: 2, cached: cached, now: now)
+        XCTAssertTrue(label.dimmed)
+        XCTAssertEqual(label.plainText, "2: 5h 60% / WK 0%")
+        XCTAssertEqual(label.segments.map(\.band), [.normal, .critical])
+        let inks = label.segments.map { Colors.ink(for: .barSegment, band: $0.band, dimmed: label.dimmed) }
+        XCTAssertEqual(inks.map(\.tone), [.muted, .red])
+        XCTAssertEqual(Colors.color(for: .barSegment, band: label.segments[1].band, dimmed: label.dimmed), Colors.red)
+    }
+
     func testBarLabelNeverCarriesTokenPlanEmailOrNickname() {
         // ISC-116: the label is built from the account's number and the window list only.
         let account = UIFixtures.account("me@example.com", nickname: "Work")
