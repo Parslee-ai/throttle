@@ -88,6 +88,10 @@ final class PopupSnapshotTests: XCTestCase {
         fixture.add("stale@example.com", provider: .anthropic, plan: "max",
                     windows: claudeWindows(fable: 30, session: 10, weekly: 20, resetsIn: 2 * 86_400),
                     isStale: true, fetchedAt: now.addingTimeInterval(-12 * 60))
+        // Dimmed with a window at 0%: the 0% must still read red.
+        fixture.add("stale-empty@example.com", provider: .anthropic, plan: "max",
+                    windows: claudeWindows(fable: 100, session: 85, weekly: 40, resetsIn: 3 * 86_400),
+                    isStale: true, fetchedAt: now.addingTimeInterval(-15 * 60))
         fixture.add("signed-out@example.com", provider: .anthropic, plan: "max",
                     windows: claudeWindows(fable: 30, session: 10, weekly: 20, resetsIn: 86_400), state: .needsLogin)
         fixture.add("console@example.com", provider: .anthropic, plan: nil,
@@ -96,6 +100,9 @@ final class PopupSnapshotTests: XCTestCase {
                     windows: claudeWindows(fable: 5, session: 5, weekly: 5, resetsIn: 3 * 86_400),
                     state: .rateLimited(until: now.addingTimeInterval(3600)))
         fixture.add("broken@example.com", provider: .openai, plan: "pro", windows: [], state: .error("The request timed out."))
+        fixture.add("errored-empty@example.com", provider: .openai, plan: "pro",
+                    windows: weekly(100, resetsIn: 86_400), state: .error("The request timed out."),
+                    isStale: true, resetCredits: 1)
         return fixture
     }
 
@@ -144,10 +151,18 @@ final class PopupSnapshotTests: XCTestCase {
     func testMenuBarLabelsRenderInDarkAndLight() throws {
         let fixture = referenceFixture()
         let ordered = AccountOrder.grouped(fixture.accounts)
-        let labels = ordered.enumerated().map { offset, account in
+        var labels = ordered.enumerated().map { offset, account in
             Formatting.barLabel(account: account, index: offset + 1, cached: fixture.statuses[account.id], now: now)
         }
         XCTAssertEqual(labels.first?.plainText, "1: 5h 100% / WK 100% / FB 100%")
+        // Stale labels, one of them at 0%: dimmed, but the 0% stays red.
+        let states = statesFixture()
+        let staleLabels = AccountOrder.grouped(states.accounts).enumerated().compactMap { offset, account -> BarLabel? in
+            guard states.statuses[account.id]?.isStale == true else { return nil }
+            return Formatting.barLabel(account: account, index: offset + 1, cached: states.statuses[account.id], now: now)
+        }
+        XCTAssertTrue(staleLabels.contains { $0.dimmed && $0.segments.contains { $0.band == .critical } })
+        labels += staleLabels
         let strip = VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
                 MenuBarLabel(label: label, onHover: { _ in })

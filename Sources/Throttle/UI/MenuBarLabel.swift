@@ -8,7 +8,9 @@ import SwiftUI
 /// `Text` run is dropped when the status item is rendered. The text itself is
 /// built by concatenating `Text` runs, which keep their own `foregroundColor`,
 /// so each window segment carries its own band color (ISC-110) while the
-/// number and the separators keep the default label color. Only the glyph,
+/// number and the separators keep the default label color. A stale label is
+/// drawn secondary, except that a red segment stays red (`Colors.ink`), so
+/// "0%" never shows in another color. Only the glyph,
 /// the account's number, and the window numbers are ever composed here
 /// (ISC-116).
 struct MenuBarLabel: View {
@@ -35,8 +37,8 @@ struct MenuBarLabel: View {
             if offset > 0 {
                 result = result + Text(Formatting.segmentSeparator)
             }
-            let piece = Text(segment.text)
-            result = result + (label.dimmed ? piece : piece.foregroundColor(Colors.color(for: segment.band)))
+            let color = Colors.color(for: .barSegment, band: segment.band, dimmed: label.dimmed)
+            result = result + Text(segment.text).foregroundColor(color)
         }
         if label.isTruncated {
             result = result + Text(Formatting.overflowMarker)

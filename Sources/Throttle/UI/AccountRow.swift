@@ -66,6 +66,13 @@ struct AccountRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu { rowMenu }
+        // Like Finder: clicking away from the name field saves it.
+        .onChange(of: nameFieldFocused) { _, focused in
+            if !focused, isRenaming { commitRename() }
+        }
+        .onDisappear {
+            if isRenaming { commitRename() }
+        }
     }
 
     // MARK: Identity column
@@ -94,7 +101,7 @@ struct AccountRow: View {
                 if let cached, cached.isStale, cached.lastGoodWindows != nil {
                     Text(Formatting.agePhrase(since: cached.status.fetchedAt, now: now))
                         .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Colors.quietText)
                 }
                 stateLine
             }
@@ -102,7 +109,7 @@ struct AccountRow: View {
         }
     }
 
-    private static let nameFont = Font.system(size: 14, weight: .semibold, design: .monospaced)
+    private static let nameFont = Font.system(size: 12, weight: .semibold, design: .monospaced)
 
     private var nameLabel: some View {
         Text(account.displayName)
@@ -143,10 +150,13 @@ struct AccountRow: View {
     }
 
     private func commitRename() {
-        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Saving the email itself means "no nickname".
-        actions.rename(name == account.email ? "" : name)
+        guard isRenaming else { return }
         isRenaming = false
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An unchanged name saves nothing; saving the email itself means
+        // "no nickname".
+        guard name != account.displayName else { return }
+        actions.rename(name == account.email ? "" : name)
     }
 
     private func cancelRename() {

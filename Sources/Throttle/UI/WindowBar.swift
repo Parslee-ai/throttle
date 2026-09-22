@@ -4,7 +4,9 @@ import SwiftUI
 /// the percentage left on top, a bar under it, then when it resets.
 ///
 /// The percentage, the bar fill, and the track all take their color from the
-/// one band rule applied to the same rounded number the text shows.
+/// one band rule applied to the same rounded number the text shows, drawn
+/// through `Colors.ink`. A dimmed reading fades its title, reset line, and
+/// non-red parts; red stays full strength, so "0%" always reads red.
 struct WindowBar: View {
     let window: UsageWindow
     let providerName: String
@@ -23,25 +25,25 @@ struct WindowBar: View {
                     .foregroundStyle(PopupStyle.columnTitle)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .opacity(fade)
                 Spacer(minLength: 4)
                 Text("\(remaining)%")
                     .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(percentStyle)
+                    .foregroundStyle(Colors.color(for: .percentText, band: band, dimmed: dimmed))
             }
-            UsageBar(fraction: Double(remaining) / 100, band: band, width: PopupMetrics.columnWidth)
+            UsageBar(fraction: Double(remaining) / 100, band: band, dimmed: dimmed, width: PopupMetrics.columnWidth)
                 .padding(.top, 8)
             ResetLine(reset: Formatting.resetText(resetsAt: window.resetsAt, now: now))
+                .opacity(fade)
                 .padding(.top, 6)
         }
         .frame(width: PopupMetrics.columnWidth, alignment: .leading)
-        .opacity(dimmed ? 0.5 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Formatting.accessibilityLabel(providerName: providerName, displayName: displayName, window: window))
     }
 
-    private var percentStyle: AnyShapeStyle {
-        dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(Colors.color(for: band))
-    }
+    /// Opacity for the parts that carry no band color.
+    private var fade: Double { dimmed ? Colors.dimmedOpacity : 1 }
 }
 
 /// A thin capsule: the track, and the part of the window that is left.
@@ -49,16 +51,17 @@ struct UsageBar: View {
     /// Remaining fraction, 0...1.
     let fraction: Double
     let band: UsageBand
+    let dimmed: Bool
     let width: CGFloat
 
     var body: some View {
         let filled = width * CGFloat(min(1, max(0, fraction)))
         ZStack(alignment: .leading) {
             Capsule()
-                .fill(Colors.track(for: band))
+                .fill(Colors.color(for: .barTrack, band: band, dimmed: dimmed))
             if filled > 0 {
                 Capsule()
-                    .fill(Colors.color(for: band))
+                    .fill(Colors.color(for: .barFill, band: band, dimmed: dimmed))
                     .frame(width: max(filled, PopupMetrics.barHeight))
             }
         }
@@ -80,11 +83,11 @@ struct ResetLine: View {
 
     private var line: Text {
         guard reset.isScheduled else {
-            return Text(reset.relative).foregroundStyle(.tertiary)
+            return Text(reset.relative).foregroundStyle(Colors.quietText)
         }
         let relative = Text(reset.relative).foregroundStyle(.secondary)
         guard let stamp = reset.stamp else { return relative }
-        return relative + Text(Formatting.stampSeparator + stamp).foregroundStyle(.tertiary)
+        return relative + Text(Formatting.stampSeparator + stamp).foregroundStyle(Colors.quietText)
     }
 }
 
@@ -109,7 +112,7 @@ struct ResetCreditsColumn: View {
                 .lineLimit(1)
         }
         .frame(width: PopupMetrics.columnWidth, alignment: .leading)
-        .opacity(dimmed ? 0.5 : 1)
+        .opacity(dimmed ? Colors.dimmedOpacity : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Manual resets, \(count) available")
     }
