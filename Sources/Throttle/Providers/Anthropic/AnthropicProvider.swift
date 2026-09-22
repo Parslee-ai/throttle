@@ -13,15 +13,24 @@ struct AnthropicProvider: UsageProvider {
     private let now: @Sendable () -> Date
     /// Receives one line per non-200 response, with the bearer header removed.
     private let diagnostics: Diagnostics?
+    /// Plans read from the profile this launch. Shared by every copy of this
+    /// provider, so the profile is read at most once per account per launch.
+    private let plans = ProfilePlanCache()
+    /// Longest the one-time plan read may add to a usage read. The scheduler
+    /// times the whole fetch, so a slow profile must never turn a good usage
+    /// reading into a timeout; past this it is abandoned and tried again later.
+    private let profileBudget: TimeInterval
 
     init(
         client: HTTPClient = URLSessionHTTPClient(),
         now: @escaping @Sendable () -> Date = Date.init,
-        diagnostics: Diagnostics? = nil
+        diagnostics: Diagnostics? = nil,
+        profileBudget: TimeInterval = 4
     ) {
         self.client = client
         self.now = now
         self.diagnostics = diagnostics
+        self.profileBudget = profileBudget
     }
 
     // MARK: - Usage
@@ -42,13 +51,15 @@ struct AnthropicProvider: UsageProvider {
         switch response.statusCode {
         case 200:
             let windows = try AnthropicUsageParser.parse(response.body)
+            let fetchedAt = now()
             return AccountStatus(
                 accountID: account.id,
                 provider: .anthropic,
                 email: account.email,
                 windows: windows,
-                fetchedAt: now(),
-                state: .ok
+                fetchedAt: fetchedAt,
+                state: .ok,
+                planLabel: await planLabel(for: account, credential: credential)
             )
         case 401:
             Self.logger.error("Usage rejected with HTTP 401: \(Self.snippet(response.body), privacy: .public)")
@@ -117,34 +128,62 @@ struct AnthropicProvider: UsageProvider {
 
     // MARK: - Profile
 
-    /// Best-effort read of the account's email and organization name, used once
-    /// after login to label the account. Any non-200 yields nils; only a
-    /// transport failure throws.
-    func fetchProfile(credential: AccountCredential) async throws -> (email: String?, organizationName: String?) {
+    /// Best-effort read of the account's email and plan. `nil` for any
+    /// non-200 or a body that is not a JSON object; only a transport failure
+    /// throws.
+    func fetchProfile(credential: AccountCredential, accountID: UUID? = nil) async throws -> AnthropicProfile? {
         let request = authorizedRequest(url: AnthropicEndpoints.profile, accessToken: credential.accessToken)
         let response = try await send(request)
-        if response.statusCode != 200 {
-            await diagnose(.profile, accountID: nil, request: request, response: response)
+        guard response.statusCode == 200 else {
+            await diagnose(.profile, accountID: accountID, request: request, response: response)
+            return nil
         }
-        guard response.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: response.body),
-              let root = json as? [String: Any] else {
-            return (nil, nil)
-        }
+        return AnthropicProfileParser.parse(response.body)
+    }
 
-        var email: String?
-        if let account = root["account"] as? [String: Any] {
-            email = nonEmpty(account["email"] as? String)
+    /// The account's plan, read from the profile once per launch with the
+    /// credential this usage fetch already resolved. A failed read is silent:
+    /// it returns `nil`, leaves the usage reading and its state alone, arms no
+    /// backoff, and is tried again on a later poll. A successful read is kept,
+    /// even when the profile names no plan.
+    private func planLabel(for account: Account, credential: AccountCredential) async -> String? {
+        if let known = await plans.known(for: account.id) {
+            return known.plan
         }
-        if email == nil {
-            email = nonEmpty(root["email"] as? String)
+        guard let profile = await boundedProfileRead(credential: credential, accountID: account.id) else {
+            return nil
         }
+        await plans.remember(profile.planLabel, for: account.id)
+        return profile.planLabel
+    }
 
-        var organizationName: String?
-        if let organization = root["organization"] as? [String: Any] {
-            organizationName = nonEmpty(organization["name"] as? String)
+    private enum ProfileRead: Sendable {
+        case finished(AnthropicProfile?)
+        case outOfTime
+    }
+
+    /// The profile, or `nil` when the read fails in any way or does not
+    /// finish within `profileBudget` (the request is then cancelled).
+    private func boundedProfileRead(credential: AccountCredential, accountID: UUID) async -> AnthropicProfile? {
+        let budget = profileBudget
+        let outcome = await withTaskGroup(of: ProfileRead.self) { group -> ProfileRead in
+            group.addTask {
+                // `try?` flattens the optional: a transport failure, a
+                // non-200, and an unreadable body all become `nil`.
+                .finished(try? await fetchProfile(credential: credential, accountID: accountID))
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(budget))
+                return .outOfTime
+            }
+            let first = await group.next() ?? .outOfTime
+            group.cancelAll()
+            return first
         }
-        return (email, organizationName)
+        if case .finished(let profile) = outcome {
+            return profile
+        }
+        return nil
     }
 
     // MARK: - Refresh
@@ -350,6 +389,24 @@ struct AnthropicProvider: UsageProvider {
     private func nonEmpty(_ s: String?) -> String? {
         guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return s
+    }
+}
+
+/// The plan each account's profile reported this launch. An account with no
+/// entry has not been read successfully yet.
+private actor ProfilePlanCache {
+    struct Known: Sendable {
+        let plan: String?
+    }
+
+    private var known: [UUID: Known] = [:]
+
+    func known(for id: UUID) -> Known? {
+        known[id]
+    }
+
+    func remember(_ plan: String?, for id: UUID) {
+        known[id] = Known(plan: plan)
     }
 }
 

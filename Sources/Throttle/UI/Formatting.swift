@@ -257,11 +257,18 @@ enum Formatting {
 
     // MARK: Account text
 
-    /// The plan under the account name: `max` → `Max`, `pro_20x` → `Pro 20x`.
-    /// `nil` when there is no plan to show.
+    /// The plan under the account name: `max` → `Max`, `max 20x` → `Max 20x`,
+    /// `pro_20x` → `Pro 20x`. Only a plan-shaped token (letters, digits, `_`,
+    /// `-`, single spaces) is tidied; anything else, such as a label with an
+    /// `@` in it, is shown as it is. `nil` when there is nothing to show.
     static func planText(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let words = raw
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.range(of: #"^[\p{L}\p{N}_-]+( [\p{L}\p{N}_-]+)*$"#, options: .regularExpression) != nil else {
+            return trimmed
+        }
+        let words = trimmed
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .split(separator: " ", omittingEmptySubsequences: true)

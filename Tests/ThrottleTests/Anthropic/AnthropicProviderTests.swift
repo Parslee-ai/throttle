@@ -27,9 +27,11 @@ final class AnthropicProviderTests: XCTestCase {
 
     func testUsageRequestCarriesExactHeadersAndNoCookies() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try AnthropicFixtures.data("anthropic-limits"))
+        client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
         _ = try await makeProvider(client).fetchStatus(account: account, credential: credential)
 
-        XCTAssertEqual(client.requests.count, 1)
+        XCTAssertEqual(client.requests.count, 2, "the usage read, then the one-time plan read")
+        XCTAssertEqual(client.requests.last?.url, AnthropicEndpoints.profile)
         let request = try XCTUnwrap(client.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1")
         XCTAssertEqual(request.httpMethod, "GET")
@@ -40,7 +42,7 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent")?.hasPrefix("throttle/"), true)
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
         XCTAssertFalse(request.httpShouldHandleCookies)
-        XCTAssertEqual(client.maxBodyLimits, [256 * 1024])
+        XCTAssertEqual(client.maxBodyLimits, [256 * 1024, 256 * 1024])
     }
 
     func testProviderCaseIsAnthropic() {
@@ -195,12 +197,12 @@ final class AnthropicProviderTests: XCTestCase {
 
     // MARK: Profile (ISC-54)
 
-    func testProfileParsesNestedEmailAndOrganization() async throws {
-        let body = #"{"account":{"uuid":"u1","email":"nested@example.com"},"organization":{"uuid":"o1","name":"Example Org"}}"#
+    func testProfileParsesNestedEmailAndPlan() async throws {
+        let body = #"{"account":{"uuid":"u1","email":"nested@example.com"},"organization":{"uuid":"o1","name":"Example Org","organization_type":"claude_pro"}}"#
         let client = AnthropicMockHTTPClient(status: 200, body: Data(body.utf8))
         let profile = try await makeProvider(client).fetchProfile(credential: credential)
-        XCTAssertEqual(profile.email, "nested@example.com")
-        XCTAssertEqual(profile.organizationName, "Example Org")
+        XCTAssertEqual(profile?.email, "nested@example.com")
+        XCTAssertEqual(profile?.planLabel, "pro", "the plan, never the organization name")
 
         let request = try XCTUnwrap(client.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/profile")
@@ -211,15 +213,114 @@ final class AnthropicProviderTests: XCTestCase {
     func testProfileFallsBackToTopLevelEmail() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: Data(#"{"email":"flat@example.com"}"#.utf8))
         let profile = try await makeProvider(client).fetchProfile(credential: credential)
-        XCTAssertEqual(profile.email, "flat@example.com")
-        XCTAssertNil(profile.organizationName)
+        XCTAssertEqual(profile?.email, "flat@example.com")
+        XCTAssertNil(profile?.planLabel)
     }
 
-    func testProfileReturnsNilsOnNon200() async throws {
+    func testProfileIsNilOnNon200() async throws {
         let client = AnthropicMockHTTPClient(status: 404, body: Data("not found".utf8))
         let profile = try await makeProvider(client).fetchProfile(credential: credential)
-        XCTAssertNil(profile.email)
-        XCTAssertNil(profile.organizationName)
+        XCTAssertNil(profile)
+    }
+
+    // MARK: Plan from the profile
+
+    private func usageBody() throws -> Data { try AnthropicFixtures.data("anthropic-limits") }
+    private func profileBody() throws -> Data { try AnthropicFixtures.data("anthropic-profile") }
+
+    /// The plan is read once per account per launch: two polls, one profile
+    /// request, and both readings carry the plan.
+    func testTwoPollsReadTheProfileOnce() async throws {
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        client.enqueue(status: 200, body: try usageBody())
+        let provider = makeProvider(client)
+
+        let first = try await provider.fetchStatus(account: account, credential: credential)
+        let second = try await provider.fetchStatus(account: account, credential: credential)
+
+        XCTAssertEqual(first.planLabel, "max 20x")
+        XCTAssertEqual(second.planLabel, "max 20x")
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, AnthropicEndpoints.usage])
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 1)
+        XCTAssertEqual(client.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer \(AnthropicSampleSecret.accessToken)", "the usage fetch's credential")
+    }
+
+    /// A failed profile read is silent: the usage reading is unchanged and
+    /// `.ok`, and the next poll tries the profile again.
+    func testFailedProfileLeavesUsageAloneAndIsRetried() async throws {
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 429, body: Data(#"{"error":"rate limited"}"#.utf8), headers: ["Retry-After": "3600"])
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(error: UsageError.transport(URLError(.timedOut)))
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        client.enqueue(status: 200, body: try usageBody())
+        let provider = makeProvider(client)
+
+        let failedWith429 = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(failedWith429.state, .ok)
+        XCTAssertEqual(failedWith429.windows.map(\.key), ["5h", "7d", "scoped:Fable", "scoped:Claude Opus"])
+        XCTAssertNil(failedWith429.planLabel)
+
+        let failedInTransport = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(failedInTransport.state, .ok)
+        XCTAssertNil(failedInTransport.planLabel)
+
+        let read = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(read.planLabel, "max 20x")
+        let afterwards = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(afterwards.planLabel, "max 20x")
+
+        XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 3, "retried after each failure, then never again")
+        XCTAssertEqual(client.requests.count, 7)
+    }
+
+    /// A profile that does not answer within the budget is abandoned: the
+    /// usage reading comes back on time and `.ok`, and the next poll tries
+    /// the profile again.
+    func testSlowProfileIsAbandonedWithoutDelayingUsage() async throws {
+        let client = SlowProfileClient(usage: try usageBody(), profile: try profileBody(), profileDelay: 30)
+        let provider = AnthropicProvider(client: client, now: { [fixedNow] in fixedNow }, profileBudget: 0.2)
+
+        let started = Date()
+        let status = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the slow profile is cut off at the budget")
+        XCTAssertEqual(status.state, .ok)
+        XCTAssertEqual(status.windows.count, 4)
+        XCTAssertNil(status.planLabel)
+
+        client.profileDelay = 0
+        let next = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(next.planLabel, "max 20x", "retried after running out of time")
+        XCTAssertEqual(client.profileRequests, 2)
+    }
+
+    /// Each account gets its own read; a failed usage read spends no request
+    /// on the profile.
+    func testProfileIsPerAccountAndSkippedWhenUsageFails() async throws {
+        let other = Account(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, provider: .anthropic, email: "other@example.com", sortIndex: 1)
+        let client = AnthropicMockHTTPClient(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: try profileBody())
+        client.enqueue(status: 401)
+        client.enqueue(status: 200, body: try usageBody())
+        client.enqueue(status: 200, body: Data(#"{"account":{"email":"other@example.com"},"organization":{"organization_type":"claude_pro"}}"#.utf8))
+        let provider = makeProvider(client)
+
+        let first = try await provider.fetchStatus(account: account, credential: credential)
+        XCTAssertEqual(first.planLabel, "max 20x")
+        do {
+            _ = try await provider.fetchStatus(account: other, credential: credential)
+            XCTFail("expected needsLogin")
+        } catch UsageError.needsLogin {
+        }
+        let second = try await provider.fetchStatus(account: other, credential: credential)
+        XCTAssertEqual(second.planLabel, "pro")
+        XCTAssertEqual(client.requests.map(\.url), [
+            AnthropicEndpoints.usage, AnthropicEndpoints.profile,
+            AnthropicEndpoints.usage,
+            AnthropicEndpoints.usage, AnthropicEndpoints.profile,
+        ])
     }
 
     // MARK: Refresh
@@ -365,5 +466,50 @@ final class AnthropicConsoleTokenTests: XCTestCase {
         XCTAssertFalse(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: ["user:profile", "user:inference"])))
         XCTAssertFalse(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: [])))
         XCTAssertTrue(AnthropicProvider.isConsoleToken(AccountCredential(accessToken: "t", scopes: ["user:profile"])))
+    }
+}
+
+/// Answers usage at once and the profile after `profileDelay` seconds,
+/// honoring cancellation the way `URLSession` does.
+private final class SlowProfileClient: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private let usage: Data
+    private let profile: Data
+    private var delay: TimeInterval
+    private var profileCount = 0
+
+    init(usage: Data, profile: Data, profileDelay: TimeInterval) {
+        self.usage = usage
+        self.profile = profile
+        self.delay = profileDelay
+    }
+
+    var profileDelay: TimeInterval {
+        get { lock.lock(); defer { lock.unlock() }; return delay }
+        set { lock.lock(); delay = newValue; lock.unlock() }
+    }
+
+    var profileRequests: Int {
+        lock.lock(); defer { lock.unlock() }
+        return profileCount
+    }
+
+    func send(_ request: URLRequest, maxBodyBytes: Int) async throws -> HTTPResponse {
+        guard request.url == AnthropicEndpoints.profile else {
+            return HTTPResponse(statusCode: 200, headers: [:], body: usage)
+        }
+        let wait: TimeInterval = {
+            lock.lock(); defer { lock.unlock() }
+            profileCount += 1
+            return delay
+        }()
+        if wait > 0 {
+            do {
+                try await Task.sleep(for: .seconds(wait))
+            } catch {
+                throw UsageError.transport(URLError(.cancelled))
+            }
+        }
+        return HTTPResponse(statusCode: 200, headers: [:], body: profile)
     }
 }
