@@ -113,6 +113,33 @@ final class MenuBarImageTests: XCTestCase {
         }
     }
 
+    /// The glyph and the text carry the same opacity: the label color's
+    /// alpha, applied once. Measured on a transparent background as the
+    /// strongest alpha in each region.
+    func testGlyphAndTextShareOneOpacity() throws {
+        for dimmed in [false, true] {
+            let bar = label([UIFixtures.window("5h", label: "5h", used: 10)], isStale: dimmed)
+            let image = MenuBarImage.image(for: bar)
+            let layout = MenuBarImage.layout(for: bar)
+            for appearance in [NSAppearance(named: .darkAqua)!, NSAppearance(named: .aqua)!] {
+                let rep = try MenuBarRendering.render([image], appearance: appearance, background: nil, padding: 0)
+                let split = Int(layout.textX * MenuBarRendering.scale)
+                let glyph = MenuBarRendering.maxAlpha(in: rep, columns: 0..<(split - 2))
+                // The "1: " run is drawn in the neutral color too.
+                let prefixEnd = split + Int(NSAttributedString(string: bar.prefix, attributes: [.font: MenuBarImage.font]).size().width * MenuBarRendering.scale)
+                let text = MenuBarRendering.maxAlpha(in: rep, columns: split..<prefixEnd)
+                var expected: CGFloat = 0
+                appearance.performAsCurrentDrawingAppearance {
+                    expected = MenuBarImage.neutralColor(dimmed: dimmed).usingColorSpace(.sRGB)?.alphaComponent ?? 0
+                }
+                let name = "\(appearance.name.rawValue) dimmed=\(dimmed)"
+                XCTAssertEqual(glyph, expected, accuracy: 0.05, "glyph alpha, \(name)")
+                XCTAssertEqual(text, expected, accuracy: 0.05, "text alpha, \(name)")
+                XCTAssertEqual(glyph, text, accuracy: 0.05, name)
+            }
+        }
+    }
+
     // MARK: Helpers
 
     private func color(of substring: String, in text: NSAttributedString) throws -> NSColor {
@@ -142,7 +169,13 @@ final class MenuBarImageTests: XCTestCase {
 enum MenuBarRendering {
     static let scale: CGFloat = 2
 
-    static func render(_ images: [NSImage], appearance: NSAppearance, padding: CGFloat = 8, spacing: CGFloat = 6) throws -> NSBitmapImageRep {
+    static func render(
+        _ images: [NSImage],
+        appearance: NSAppearance,
+        background: NSColor? = Swatch.windowBackground.nsColor,
+        padding: CGFloat = 8,
+        spacing: CGFloat = 6
+    ) throws -> NSBitmapImageRep {
         let width = (images.map(\.size.width).max() ?? 0) + padding * 2
         let height = images.reduce(0) { $0 + $1.size.height } + spacing * CGFloat(max(0, images.count - 1)) + padding * 2
         let rep = try XCTUnwrap(NSBitmapImageRep(
@@ -162,8 +195,13 @@ enum MenuBarRendering {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         appearance.performAsCurrentDrawingAppearance {
-            Swatch.windowBackground.nsColor.setFill()
-            NSRect(origin: .zero, size: rep.size).fill()
+            if let background {
+                background.setFill()
+                NSRect(origin: .zero, size: rep.size).fill()
+            } else {
+                NSColor.clear.setFill()
+                NSRect(origin: .zero, size: rep.size).fill(using: .copy)
+            }
             var top = height - padding
             for image in images {
                 top -= image.size.height
@@ -186,6 +224,17 @@ enum MenuBarRendering {
             }
         }
         return total
+    }
+
+    /// The strongest alpha among the pixels in `columns`.
+    static func maxAlpha(in rep: NSBitmapImageRep, columns: Range<Int>) -> CGFloat {
+        var strongest: CGFloat = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in columns where x >= 0 && x < rep.pixelsWide {
+                strongest = max(strongest, rep.colorAt(x: x, y: y)?.alphaComponent ?? 0)
+            }
+        }
+        return strongest
     }
 
     static func isRed(_ r: Int, _ g: Int, _ b: Int) -> Bool {
