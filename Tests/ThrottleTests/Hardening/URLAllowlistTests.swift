@@ -1,21 +1,31 @@
 import XCTest
 
-/// ISC-133: every network call is HTTPS to one of five hosts, and the only
-/// cleartext URLs are the OAuth loopback redirect and its parser.
+/// ISC-133: every network call is HTTPS to one of eight allowlisted hosts (six
+/// vendor surfaces plus the project's own GitHub Releases for the user-initiated
+/// update check), and the only cleartext URLs are the OAuth loopback redirect
+/// and its parser.
 ///
 /// This is a text audit of `Sources/`, not a runtime check, because the point is
-/// that no sixth host can be *introduced*. A runtime test only proves that the
+/// that no unlisted host can be *introduced*. A runtime test only proves that the
 /// hosts exercised by that test are allowed.
 final class URLAllowlistTests: XCTestCase {
-    /// The five vendor surfaces from ISC-133. `platform.claude.com` and
-    /// `console.anthropic.com` are the same surface mid-rename, so both appear.
+    /// The six vendor surfaces from ISC-133, then the update check's two hosts.
+    /// `platform.claude.com` and `console.anthropic.com` are the same surface
+    /// mid-rename, so both appear.
     private let allowedHTTPSHosts: Set<String> = [
         "api.anthropic.com",
         "platform.claude.com",
         "console.anthropic.com",
         "claude.ai",
+        // Claude subscription authorize page, claude.com/cai/oauth/authorize.
+        "claude.com",
         "chatgpt.com",
         "auth.openai.com",
+        // The user-initiated update check (ISC-179/189): the release listing
+        // on api.github.com and the package download on github.com. The
+        // download's redirect hosts are bare host names, not URL literals.
+        "api.github.com",
+        "github.com",
     ]
 
     /// The loopback redirect target. Cleartext is correct here and nowhere else:
