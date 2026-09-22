@@ -71,8 +71,9 @@ actor AccountStore {
         return storage
     }
 
-    /// The accounts in display order: `sortIndex` ascending, ties by `addedAt`
-    /// (ISC-92). Empty until `load()` has run.
+    /// The accounts in store order: `sortIndex` ascending, ties by `addedAt`
+    /// (ISC-92). The UI groups this by provider (`AccountOrder`). Empty until
+    /// `load()` has run.
     func accounts() -> [Account] {
         storage
     }
@@ -142,8 +143,10 @@ actor AccountStore {
         }
     }
 
-    /// Moves an account to `index` in display order (clamped to the valid
+    /// Moves an account to `index` in store order (clamped to the valid
     /// range), renumbers every `sortIndex` to 0...n-1, and persists.
+    /// `AccountOrder.storeIndex` turns a move inside a provider section into
+    /// this index.
     func move(id: UUID, to index: Int) throws {
         try ensureLoaded()
         guard let from = storage.firstIndex(where: { $0.id == id }) else {
@@ -152,28 +155,6 @@ actor AccountStore {
         let account = storage.remove(at: from)
         let target = min(max(index, 0), storage.count)
         storage.insert(account, at: target)
-        try renumberAndPersist()
-    }
-
-    /// Moves the account one position earlier. A no-op at the top.
-    func moveUp(id: UUID) throws {
-        try ensureLoaded()
-        guard let from = storage.firstIndex(where: { $0.id == id }) else {
-            throw AccountStoreError.unknownAccount(id)
-        }
-        guard from > 0 else { return }
-        storage.swapAt(from, from - 1)
-        try renumberAndPersist()
-    }
-
-    /// Moves the account one position later. A no-op at the bottom.
-    func moveDown(id: UUID) throws {
-        try ensureLoaded()
-        guard let from = storage.firstIndex(where: { $0.id == id }) else {
-            throw AccountStoreError.unknownAccount(id)
-        }
-        guard from < storage.count - 1 else { return }
-        storage.swapAt(from, from + 1)
         try renumberAndPersist()
     }
 

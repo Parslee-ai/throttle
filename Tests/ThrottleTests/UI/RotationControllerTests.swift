@@ -70,12 +70,24 @@ final class RotationControllerTests: XCTestCase {
             controller.tick()
             _ = controller.currentStatus
             _ = controller.current.map {
-                Formatting.barLabel(account: $0, cached: controller.statuses[$0.id], showRemaining: false, now: UIFixtures.now)
+                Formatting.barLabel(account: $0, index: controller.currentNumber ?? 0, cached: controller.statuses[$0.id], now: UIFixtures.now)
             }
         }
         XCTAssertEqual(controller.current?.id, list[0].id, "100 ticks over 4 accounts lands back on the first")
         XCTAssertEqual(provider.fetchCount, 0)
         XCTAssertEqual(provider.refreshCount, 0)
+    }
+
+    func testCurrentNumberIsTheOneBasedPosition() {
+        let list = accounts(3)
+        let controller = RotationController(accounts: list, statuses: [:])
+        XCTAssertEqual(controller.currentNumber, 1)
+        controller.tick()
+        XCTAssertEqual(controller.currentNumber, 2)
+        controller.tick()
+        controller.tick()
+        XCTAssertEqual(controller.currentNumber, 1)
+        XCTAssertNil(RotationController().currentNumber)
     }
 
     func testTimerTicksOnTheConfiguredInterval() async throws {

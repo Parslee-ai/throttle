@@ -1,7 +1,7 @@
 # Throttle
 
 A macOS menu bar app that shows how much of your Claude and Codex subscription
-limits you have used, across every account you own, at a glance.
+limits you have left, across every account you own, at a glance.
 
 Both providers meter usage in rolling windows. Claude has a 5-hour session
 window, a weekly window, and a separate weekly window per top-tier model. Codex
@@ -9,10 +9,15 @@ has a 5-hour window and a weekly window, plus occasional extra lanes. Today the
 only way to read any of them is to open a session logged in to that one account.
 Throttle reads them all and keeps them in the menu bar.
 
-The bar shows one account at a time: provider glyph, email, and each window as a
-compact percentage. It rotates to the next account every ten seconds in a fixed
-order. Clicking opens a window listing every account as a row with a labeled
-progress bar per window, the percent used, and when it resets.
+The bar shows one account at a time: the provider glyph, the account's number,
+and each window as a short tag with the percent left, such as
+`1: 5h 100% / WK 89% / FB 79%`. A window reads green, turns yellow at 20 % left
+or less, and red when nothing is left. The bar rotates to the next account every
+ten seconds, counting through the same numbers the window shows. Clicking opens
+a window that lists every account, grouped by provider and numbered, with a
+column per window: its name, the percent left, a bar, and when it resets. The
+window follows the system's light or dark appearance. Double-click an account's
+name, or choose **Rename…** from its menu, to give it a name of your own.
 
 Throttle is read-only. It never sends a prompt, spends a token, or changes
 anything on your account.
@@ -55,8 +60,9 @@ macOS Keychain and refreshes them on its own from then on. If a refresh ever
 fails, the account stays in the list and shows a **Log in again** button rather
 than disappearing or showing stale numbers as if they were current.
 
-Add as many accounts as you like, from either provider or both. Account order is
-yours to set by dragging rows, and the menu bar rotates in that same order.
+Add as many accounts as you like, from either provider or both. Accounts are
+grouped by provider; within a provider the order is yours to set by dragging
+rows, and the menu bar rotates in that same order.
 
 ## What Throttle reads
 

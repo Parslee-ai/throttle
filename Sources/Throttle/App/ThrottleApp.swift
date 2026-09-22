@@ -38,12 +38,15 @@ struct ThrottleApp: App {
     }
 
     /// The label for the account on display, rebuilt from cached data only.
+    /// Its number is the account's place in the rotation, which runs over the
+    /// same ordered list the detail window numbers.
     private var currentLabel: BarLabel? {
-        guard let account = model.rotation.current else { return nil }
+        guard let account = model.rotation.current,
+              let number = model.rotation.currentNumber else { return nil }
         return Formatting.barLabel(
             account: account,
+            index: number,
             cached: model.rotation.statuses[account.id],
-            showRemaining: model.settings.showRemaining,
             now: Date()
         )
     }

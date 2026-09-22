@@ -1,59 +1,45 @@
 import SwiftUI
 
-/// The `MenuBarExtra` window: every account as a row, the add-account menu,
-/// and the footer (ISC-117 through ISC-130). 480 pt wide; the list scrolls
-/// once the window would pass 720 pt.
+/// The `MenuBarExtra` window: the header with the add-account menu, every
+/// account grouped by provider, and the footer (ISC-117 through ISC-130).
+/// `PopupMetrics.width` wide; the list scrolls once it would pass
+/// `PopupMetrics.maxListHeight`.
+///
+/// The window paints its own adaptive background, so it follows the system's
+/// light or dark setting like every color it draws with.
 struct DetailWindow: View {
     @Bindable var model: AppModel
-
-    static let width: CGFloat = 480
-    static let maxListHeight: CGFloat = 600
 
     @State private var pendingRemoval: Account?
     @State private var showingSettings = false
     @State private var importPicker: ImportPicker?
-    @State private var reportedHeights: [UUID: CGFloat] = [:]
-
-    /// Rows a lazy `List` has not rendered yet report no height. Sizing the
-    /// list only from reported rows starves the rest: at height 1 only the
-    /// first row renders, so only the first row reports, so the list stays one
-    /// row tall until something else forces a relayout. Every unreported row
-    /// counts at an estimate so all rows get laid out, then real heights take
-    /// over.
-    static let estimatedRowHeight: CGFloat = 96
-
-    private var listHeight: CGFloat {
-        let ids = model.accounts.map(\.id)
-        let total = ids.reduce(CGFloat(0)) { sum, id in
-            sum + (reportedHeights[id] ?? Self.estimatedRowHeight)
-        }
-        return max(total, 1)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            divider
             if model.accounts.isEmpty {
                 emptyState
             } else {
-                accountList
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    AccountsPanel(
+                        accounts: model.accounts,
+                        statuses: model.statuses,
+                        planLabels: planLabels,
+                        now: context.date,
+                        actions: panelActions
+                    )
+                }
             }
-            Divider()
+            divider
             footer
             if let error = model.lastError {
-                Divider()
+                divider
                 errorBanner(error)
             }
-            Divider()
-            Button("Quit Throttle") { NSApplication.shared.terminate(nil) }
-                .keyboardShortcut("q", modifiers: .command)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 8)
         }
-        .frame(width: Self.width)
-        .background(.regularMaterial)
+        .frame(width: PopupMetrics.width)
+        .background(Colors.windowBackground)
         .sheet(item: $model.activeLogin) { flow in
             LoginSheet(flow: flow) { model.activeLogin = nil }
         }
@@ -64,7 +50,7 @@ struct DetailWindow: View {
             ImportPickerSheet(picker: picker, onImport: model.importAccount) { importPicker = nil }
         }
         .confirmationDialog(
-            "Remove \(pendingRemoval?.email ?? "this account")?",
+            "Remove \(pendingRemoval?.displayName ?? "this account")?",
             isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
             presenting: pendingRemoval
         ) { account in
@@ -75,18 +61,47 @@ struct DetailWindow: View {
         }
     }
 
+    private var planLabels: [UUID: String] {
+        var labels: [UUID: String] = [:]
+        for account in model.accounts {
+            if let plan = model.planLabel(for: account) { labels[account.id] = plan }
+        }
+        return labels
+    }
+
+    private var panelActions: AccountsPanelActions {
+        let model = model
+        return AccountsPanelActions(
+            refresh: { model.refresh($0) },
+            retryStatusCheck: { model.retryProvider(for: $0) },
+            reLogin: { model.reLogin($0) },
+            moveUp: { model.moveUp($0) },
+            moveDown: { model.moveDown($0) },
+            moveInSection: { model.move(in: $0, from: $1, to: $2) },
+            rename: { model.rename($0, to: $1) },
+            remove: { pendingRemoval = $0 }
+        )
+    }
+
     // MARK: Sections
 
+    private var divider: some View {
+        Rectangle()
+            .fill(Colors.divider)
+            .frame(height: 1)
+    }
+
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: "gauge.with.dots.needle.33percent")
+                .foregroundStyle(.secondary)
             Text("Throttle")
-                .font(.headline)
+                .font(.system(size: 15, weight: .semibold))
             Spacer()
             AddAccountMenu(model: model, importPicker: $importPicker)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, PopupMetrics.horizontalPadding)
+        .padding(.vertical, 12)
     }
 
     private var emptyState: some View {
@@ -99,96 +114,26 @@ struct DetailWindow: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(24)
+        .padding(32)
         .frame(maxWidth: .infinity)
-    }
-
-    /// A `List` so rows can be dragged into a new order (ISC-92); on macOS
-    /// `onMove` works without an edit mode. Each row reports its height so the
-    /// window hugs the content up to `maxListHeight`, then scrolls.
-    private var accountList: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            List {
-                ForEach(model.accounts) { account in
-                    VStack(spacing: 0) {
-                        HStack(alignment: .top, spacing: 0) {
-                            AccountRow(
-                                account: account,
-                                cached: model.statuses[account.id],
-                                planLabel: model.planLabel(for: account),
-                                showRemaining: model.settings.showRemaining,
-                                now: context.date,
-                                onReLogin: { model.reLogin(account) }
-                            )
-                            // The same actions as the context menu, behind a
-                            // visible button, because right-click is not
-                            // discoverable in a menu bar window.
-                            Menu {
-                                rowMenu(for: account)
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .imageScale(.large)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .menuStyle(.borderlessButton)
-                            .menuIndicator(.hidden)
-                            .fixedSize()
-                            .padding(.top, 10)
-                            .padding(.trailing, 12)
-                            .accessibilityLabel("Account actions for \(account.email)")
-                        }
-                        .contextMenu { rowMenu(for: account) }
-                        Divider().padding(.leading, 12)
-                    }
-                    .background(GeometryReader { proxy in
-                        Color.clear.preference(key: RowHeightsKey.self, value: [account.id: proxy.size.height])
-                    })
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-                .onMove { source, destination in
-                    model.move(from: source, to: destination)
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 1)
-            .onPreferenceChange(RowHeightsKey.self) { heights in
-                reportedHeights = heights
-            }
-            .frame(height: min(listHeight, Self.maxListHeight))
-        }
-    }
-
-    @ViewBuilder
-    private func rowMenu(for account: Account) -> some View {
-        Button("Refresh") { model.refresh(account) }
-        if case .rateLimited = model.statuses[account.id]?.status.state {
-            Button("Retry status check now") { model.retryProvider(for: account) }
-        }
-        Divider()
-        Button("Move up") { model.moveUp(account) }
-            .disabled(model.accounts.first?.id == account.id)
-        Button("Move down") { model.moveDown(account) }
-            .disabled(model.accounts.last?.id == account.id)
-        Divider()
-        switch model.statuses[account.id]?.status.state {
-        case .needsLogin, .forbidden:
-            Button("Sign in again") { model.reLogin(account) }
-        default:
-            Button("Sign in again…") { model.reLogin(account) }
-        }
-        Button("Remove…", role: .destructive) { pendingRemoval = account }
     }
 
     private var footer: some View {
         HStack(spacing: 12) {
             Text(lastUpdatedText)
-                .font(.caption)
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
+            footerControls
+        }
+        .padding(.horizontal, PopupMetrics.horizontalPadding)
+        .padding(.vertical, 10)
+    }
+
+    /// The footer's trailing controls, in one row.
+    private var footerControls: some View {
+        HStack(spacing: 10) {
             Button("Refresh all") { model.refreshAll() }
                 .controlSize(.small)
             Button {
@@ -199,9 +144,11 @@ struct DetailWindow: View {
             .controlSize(.small)
             .help("Settings")
             .accessibilityLabel("Settings")
+            Button("Quit") { NSApplication.shared.terminate(nil) }
+                .keyboardShortcut("q", modifiers: .command)
+                .controlSize(.small)
+                .help("Quit Throttle")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private var lastUpdatedText: String {
@@ -214,7 +161,7 @@ struct DetailWindow: View {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             Text(message)
-                .font(.caption)
+                .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button {
@@ -225,14 +172,7 @@ struct DetailWindow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss error")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, PopupMetrics.horizontalPadding)
         .padding(.vertical, 8)
-    }
-}
-
-private struct RowHeightsKey: PreferenceKey {
-    static let defaultValue: [UUID: CGFloat] = [:]
-    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
-        value.merge(nextValue()) { _, new in new }
     }
 }

@@ -3,8 +3,9 @@ import Observation
 
 /// Decides which account the menu bar shows right now (ISC-108, 109, 113).
 ///
-/// It advances through `accounts` in the order it was given (the store's
-/// `sortIndex` order) every `interval` seconds and wraps. It reads `statuses`
+/// It advances through `accounts` in the order it was given (the display
+/// order from `AccountOrder`, so the bar counts 1, 2, … N like the detail
+/// window) every `interval` seconds and wraps. It reads `statuses`
 /// only: it holds no reference to the scheduler, the store, or a provider, so
 /// no number of ticks can cause a network request (ISC-103). Hovering the bar
 /// pauses it; when the hover ends the next tick advances as normal.
@@ -45,6 +46,13 @@ final class RotationController {
 
     var currentStatus: CachedStatus? {
         current.flatMap { statuses[$0.id] }
+    }
+
+    /// The account on display as its 1-based position in `accounts`, the
+    /// number the bar shows. `nil` with no accounts.
+    var currentNumber: Int? {
+        guard !accounts.isEmpty else { return nil }
+        return min(index, accounts.count - 1) + 1
     }
 
     /// Replaces the account list. The current account keeps its place when it

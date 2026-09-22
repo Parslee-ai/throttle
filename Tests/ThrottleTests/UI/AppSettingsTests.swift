@@ -18,7 +18,6 @@ final class AppSettingsTests: XCTestCase {
         let settings = AppSettings(defaults: makeDefaults())
         XCTAssertEqual(settings.pollInterval, 300)
         XCTAssertEqual(settings.rotationInterval, 10)
-        XCTAssertFalse(settings.showRemaining)
         XCTAssertFalse(settings.launchAtLogin)
         XCTAssertTrue(settings.accountMeta.isEmpty)
     }
@@ -53,14 +52,12 @@ final class AppSettingsTests: XCTestCase {
         let settings = AppSettings(defaults: defaults)
         settings.pollInterval = 600
         settings.rotationInterval = 15
-        settings.showRemaining = true
         let id = UUID()
         settings.setPlanLabel("Max", for: id)
 
         let reloaded = AppSettings(defaults: defaults)
         XCTAssertEqual(reloaded.pollInterval, 600)
         XCTAssertEqual(reloaded.rotationInterval, 15)
-        XCTAssertTrue(reloaded.showRemaining)
         XCTAssertEqual(reloaded.planLabel(for: id), "Max")
         reloaded.removeMeta(for: id)
         XCTAssertNil(AppSettings(defaults: defaults).planLabel(for: id))
