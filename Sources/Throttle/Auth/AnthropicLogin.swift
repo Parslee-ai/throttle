@@ -115,8 +115,8 @@ struct AnthropicLogin: OAuthLogin {
         let profile = try await provider.fetchProfile(credential: credential)
         return LoginResult(
             credential: credential,
-            email: profile.email ?? Self.fallbackEmail,
-            planLabel: profile.organizationName
+            email: profile?.email ?? Self.fallbackEmail,
+            planLabel: profile?.planLabel
         )
     }
 

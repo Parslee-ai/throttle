@@ -155,6 +155,17 @@ final class FormattingTests: XCTestCase {
         XCTAssertNil(Formatting.planText(nil))
         XCTAssertNil(Formatting.planText(""))
         XCTAssertNil(Formatting.planText("_-"))
+        XCTAssertEqual(Formatting.planText("max 20x"), "Max 20x")
+        XCTAssertEqual(Formatting.planText("  max 5x "), "Max 5x")
+    }
+
+    /// Only plan-shaped tokens are tidied. An older label that is really an
+    /// organization name, or anything with an `@` or punctuation, shows as it is.
+    func testPlanTextLeavesNonPlanLabelsAlone() {
+        XCTAssertEqual(Formatting.planText("someone@example.com's Organization"), "someone@example.com's Organization")
+        XCTAssertEqual(Formatting.planText("someone.name@example.com"), "someone.name@example.com")
+        XCTAssertEqual(Formatting.planText("Team (EU)"), "Team (EU)")
+        XCTAssertEqual(Formatting.planText("max  20x"), "max  20x", "a double space is not plan-shaped")
     }
 
     // MARK: Bar label

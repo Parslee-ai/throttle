@@ -9,7 +9,8 @@ enum AnthropicEndpoints {
     /// the cheap window read without the spend computation; the bare path
     /// answered every request from this app with a one-hour 429 (ISA D-32).
     static let usage = URL(string: "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1")!
-    /// Profile of the signed-in OAuth identity, read once after login.
+    /// Profile of the signed-in OAuth identity: read after login, and once
+    /// per account per launch for the plan (`AnthropicProfileParser`).
     static let profile = URL(string: "https://api.anthropic.com/api/oauth/profile")!
     /// Primary token endpoint, takes a JSON body.
     static let token = URL(string: "https://console.anthropic.com/v1/oauth/token")!

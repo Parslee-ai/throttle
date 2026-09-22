@@ -9,7 +9,7 @@ final class AnthropicLoginTests: XCTestCase {
     "refresh_token_expires_in":2592000,"scope":"user:profile user:inference","token_type":"Bearer"}
     """
     private static let profileBody = """
-    {"account":{"email":"person@example.com"},"organization":{"name":"Example Org"}}
+    {"account":{"email":"person@example.com"},"organization":{"name":"person@example.com's Organization","organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}
     """
 
     private func makeLogin(client: AuthMockHTTPClient, ports: [UInt16] = AnthropicLogin.defaultPorts) -> AnthropicLogin {
@@ -192,7 +192,7 @@ final class AnthropicLoginTests: XCTestCase {
         XCTAssertEqual(result.credential.scopes, ["user:profile", "user:inference"])
         XCTAssertNil(result.credential.accountID)
         XCTAssertEqual(result.email, "person@example.com")
-        XCTAssertEqual(result.planLabel, "Example Org")
+        XCTAssertEqual(result.planLabel, "max 5x", "the plan comes from the organization type, never its name")
     }
 
     func testExchangeRetriesAtConsoleOn400() async throws {

@@ -1,0 +1,17 @@
+{
+  "account": {
+    "uuid": "00000000-0000-0000-0000-000000000000",
+    "full_name": "Example Person",
+    "display_name": "Example",
+    "email": "redacted@example.com",
+    "has_claude_max": true,
+    "has_claude_pro": false
+  },
+  "organization": {
+    "uuid": "00000000-0000-0000-0000-000000000000",
+    "name": "redacted@example.com's Organization",
+    "organization_type": "claude_max",
+    "billing_type": "stripe_subscription",
+    "rate_limit_tier": "default_claude_max_20x"
+  }
+}

@@ -87,6 +87,7 @@ final class DiagnosticsTests: XCTestCase {
 
     func testNothingIsWrittenOn200() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try AnthropicFixtures.data("anthropic-limits"))
+        client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
         let provider = AnthropicProvider(client: client, now: { [fixedNow] in fixedNow }, diagnostics: diagnostics)
         _ = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.diagnosticsFile.path))
