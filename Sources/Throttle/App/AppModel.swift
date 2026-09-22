@@ -421,6 +421,9 @@ final class AppModel {
         if let plan = result.planLabel, !plan.isEmpty {
             settings.setPlanLabel(plan, for: account.id)
         }
+        // The adapter may remember the account from its old sign-in (such as
+        // the plan); the new sign-in replaces all of it.
+        await registry.usageProvider(for: flow.provider).accountDidSignIn(account.id)
         await publishAccounts()
         await scheduler.refreshNow()
     }
@@ -447,7 +450,7 @@ final class AppModel {
                     email: candidate.label,
                     credential: candidate.credential
                 )
-                _ = account
+                await registry.usageProvider(for: candidate.provider).accountDidSignIn(account.id)
                 await publishAccounts()
                 await scheduler.refreshNow()
             } catch {

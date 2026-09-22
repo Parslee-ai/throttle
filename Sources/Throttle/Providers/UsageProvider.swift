@@ -19,6 +19,25 @@ protocol UsageProvider: Sendable {
     /// started: a half-applied rotation invalidates the refresh token and locks
     /// the user out of an account that was working.
     func refresh(credential: AccountCredential) async throws -> AccountCredential
+
+    /// A login for this account just finished, new or repeated. Anything the
+    /// adapter remembered about the account from before is out of date.
+    func accountDidSignIn(_ accountID: UUID) async
+}
+
+extension UsageProvider {
+    func accountDidSignIn(_ accountID: UUID) async {}
+}
+
+/// How much of the current fetch's time budget is left.
+///
+/// The poll scheduler times credential resolution and the usage read as one
+/// fetch and binds this for its duration. An adapter that does optional,
+/// best-effort work after its usage read checks it first, so that extra work
+/// can never turn a good reading into a timeout. Unbound (`nil`) outside a
+/// scheduled fetch, such as during a login.
+enum FetchBudget {
+    @TaskLocal static var remaining: (@Sendable () -> TimeInterval)?
 }
 
 /// Failures an adapter can report. The poll scheduler maps these onto

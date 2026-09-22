@@ -16,10 +16,17 @@ struct AnthropicProvider: UsageProvider {
     /// Plans read from the profile this launch. Shared by every copy of this
     /// provider, so the profile is read at most once per account per launch.
     private let plans = ProfilePlanCache()
-    /// Longest the one-time plan read may add to a usage read. The scheduler
-    /// times the whole fetch, so a slow profile must never turn a good usage
-    /// reading into a timeout; past this it is abandoned and tried again later.
+    /// Longest the one-time plan read may add to a usage read. It is also
+    /// capped by what is left of the scheduler's budget for the fetch
+    /// (`FetchBudget`), less `profileMargin`, so a slow profile can never turn
+    /// a good usage reading into a timeout; past that it is abandoned and
+    /// tried again on a later poll.
     private let profileBudget: TimeInterval
+    /// Time kept in hand at the end of the scheduler's budget.
+    static let profileMargin: TimeInterval = 0.5
+    /// How long a refused profile read waits when the answer names no
+    /// `Retry-After`.
+    static let profileRefusalHold: TimeInterval = 3600
 
     init(
         client: HTTPClient = URLSessionHTTPClient(),
@@ -128,49 +135,100 @@ struct AnthropicProvider: UsageProvider {
 
     // MARK: - Profile
 
+    /// What one profile request produced.
+    private enum ProfileAnswer: Sendable {
+        /// A 200 with a readable body.
+        case read(AnthropicProfile)
+        /// Any other answer: a non-200, or a body that is not a JSON object.
+        /// `retryAfter` is the response's `Retry-After`, when it has one.
+        case refused(retryAfter: TimeInterval?)
+    }
+
     /// Best-effort read of the account's email and plan. `nil` for any
     /// non-200 or a body that is not a JSON object; only a transport failure
     /// throws.
     func fetchProfile(credential: AccountCredential, accountID: UUID? = nil) async throws -> AnthropicProfile? {
+        if case .read(let profile) = try await requestProfile(credential: credential, accountID: accountID) {
+            return profile
+        }
+        return nil
+    }
+
+    private func requestProfile(credential: AccountCredential, accountID: UUID?) async throws -> ProfileAnswer {
         let request = authorizedRequest(url: AnthropicEndpoints.profile, accessToken: credential.accessToken)
         let response = try await send(request)
         guard response.statusCode == 200 else {
-            await diagnose(.profile, accountID: accountID, request: request, response: response)
-            return nil
+            let retry = retryAfter(from: response)
+            await diagnose(.profile, accountID: accountID, request: request, response: response, retryAfter: retry)
+            return .refused(retryAfter: retry)
         }
-        return AnthropicProfileParser.parse(response.body)
+        guard let profile = AnthropicProfileParser.parse(response.body) else {
+            return .refused(retryAfter: nil)
+        }
+        return .read(profile)
+    }
+
+    /// Forgets the plan and any wait for this account, so the next poll
+    /// reads the profile again with the new sign-in.
+    func accountDidSignIn(_ accountID: UUID) async {
+        await plans.forget(accountID)
     }
 
     /// The account's plan, read from the profile once per launch with the
-    /// credential this usage fetch already resolved. A failed read is silent:
-    /// it returns `nil`, leaves the usage reading and its state alone, arms no
-    /// backoff, and is tried again on a later poll. A successful read is kept,
-    /// even when the profile names no plan.
+    /// credential this usage fetch already resolved. Never throws and never
+    /// changes the usage reading, its state, or the scheduler's backoff:
+    ///
+    /// - A successful read is kept for the rest of the launch, even when the
+    ///   profile names no plan.
+    /// - A refused read (a 429, a 5xx, any other non-200, or an unreadable
+    ///   body) is not retried until its `Retry-After`, or for an hour when it
+    ///   names none, so a refusing endpoint is not asked again every poll.
+    /// - A transport failure, or a read that runs out of time, is retried on
+    ///   the next poll. Nothing reached the provider's answer, no diagnostics
+    ///   line is written, the read is bounded by the time budget, and polls
+    ///   are at least a minute apart.
     private func planLabel(for account: Account, credential: AccountCredential) async -> String? {
         if let known = await plans.known(for: account.id) {
             return known.plan
         }
-        guard let profile = await boundedProfileRead(credential: credential, accountID: account.id) else {
+        let started = now()
+        if await plans.isHeld(account.id, at: started) {
             return nil
         }
-        await plans.remember(profile.planLabel, for: account.id)
-        return profile.planLabel
+        var budget = profileBudget
+        if let remaining = FetchBudget.remaining {
+            budget = min(budget, remaining() - Self.profileMargin)
+        }
+        guard budget > 0 else { return nil }
+
+        switch await boundedProfileRead(credential: credential, accountID: account.id, budget: budget) {
+        case .answered(.read(let profile)):
+            await plans.remember(profile.planLabel, for: account.id)
+            return profile.planLabel
+        case .answered(.refused(let retryAfter)):
+            await plans.hold(account.id, until: started.addingTimeInterval(retryAfter ?? Self.profileRefusalHold))
+            return nil
+        case .failed, .outOfTime:
+            return nil
+        }
     }
 
     private enum ProfileRead: Sendable {
-        case finished(AnthropicProfile?)
+        case answered(ProfileAnswer)
+        case failed
         case outOfTime
     }
 
-    /// The profile, or `nil` when the read fails in any way or does not
-    /// finish within `profileBudget` (the request is then cancelled).
-    private func boundedProfileRead(credential: AccountCredential, accountID: UUID) async -> AnthropicProfile? {
-        let budget = profileBudget
-        let outcome = await withTaskGroup(of: ProfileRead.self) { group -> ProfileRead in
+    /// One profile request, raced against `budget` seconds. The request is
+    /// cancelled when the budget runs out first.
+    private func boundedProfileRead(credential: AccountCredential, accountID: UUID, budget: TimeInterval) async -> ProfileRead {
+        await withTaskGroup(of: ProfileRead.self) { group -> ProfileRead in
             group.addTask {
-                // `try?` flattens the optional: a transport failure, a
-                // non-200, and an unreadable body all become `nil`.
-                .finished(try? await fetchProfile(credential: credential, accountID: accountID))
+                do {
+                    return .answered(try await requestProfile(credential: credential, accountID: accountID))
+                } catch {
+                    return .failed
+                }
             }
             group.addTask {
                 try? await Task.sleep(for: .seconds(budget))
@@ -180,10 +238,6 @@ struct AnthropicProvider: UsageProvider {
             group.cancelAll()
             return first
         }
-        if case .finished(let profile) = outcome {
-            return profile
-        }
-        return nil
     }
 
     // MARK: - Refresh
@@ -392,14 +446,16 @@ struct AnthropicProvider: UsageProvider {
     }
 }
 
-/// The plan each account's profile reported this launch. An account with no
-/// entry has not been read successfully yet.
+/// What the adapter knows about each account's profile this launch: the plan
+/// a successful read reported, or how long a refused read must wait. An
+/// account with neither is read on its next poll.
 private actor ProfilePlanCache {
     struct Known: Sendable {
         let plan: String?
     }
 
     private var known: [UUID: Known] = [:]
+    private var notBefore: [UUID: Date] = [:]
 
     func known(for id: UUID) -> Known? {
         known[id]
@@ -407,6 +463,21 @@ private actor ProfilePlanCache {
 
     func remember(_ plan: String?, for id: UUID) {
         known[id] = Known(plan: plan)
+        notBefore[id] = nil
+    }
+
+    func isHeld(_ id: UUID, at now: Date) -> Bool {
+        guard let until = notBefore[id] else { return false }
+        return now < until
+    }
+
+    func hold(_ id: UUID, until: Date) {
+        notBefore[id] = until
+    }
+
+    func forget(_ id: UUID) {
+        known[id] = nil
+        notBefore[id] = nil
     }
 }
 
