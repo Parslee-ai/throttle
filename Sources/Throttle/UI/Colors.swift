@@ -183,6 +183,21 @@ enum Colors {
         return ink.opacity < 1 ? base.opacity(ink.opacity) : base
     }
 
+    /// The AppKit color for an ink, for drawing outside SwiftUI (the menu bar
+    /// image). Dynamic: it resolves in the appearance it is drawn in.
+    static func nsColor(for ink: BandInk) -> NSColor {
+        let base: NSColor
+        switch ink.tone {
+        case .green: base = Swatch.green.nsColor
+        case .yellow: base = Swatch.yellow.nsColor
+        case .red: base = Swatch.red.nsColor
+        case .criticalTrack: base = Swatch.criticalTrack.nsColor
+        case .track: base = Swatch.track.nsColor
+        case .muted: base = .secondaryLabelColor
+        }
+        return ink.opacity < 1 ? base.withAlphaComponent(ink.opacity) : base
+    }
+
     /// The color of a banded part: `ink` then `color(for:)`.
     static func color(for part: BandedPart, band: UsageBand, dimmed: Bool) -> Color {
         color(for: ink(for: part, band: band, dimmed: dimmed))
