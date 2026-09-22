@@ -27,6 +27,33 @@ final class ReleaseFeedTests: XCTestCase {
         XCTAssertEqual(release.asset.downloadURL.absoluteString,
                        "https://github.com/Parslee-ai/throttle/releases/download/v0.2.0/Throttle-0.2.0.pkg")
         XCTAssertEqual(release.asset.size, 1_339_213)
+        XCTAssertEqual(release.asset.sha256, UpdateFixtures.zeroSHA256, "the digest loses its sha256: prefix")
+    }
+
+    func testAMissingOrNullDigestIsAllowed() throws {
+        XCTAssertNil(try ReleaseFeed.parse(Data(UpdateFixtures.releaseJSON(digest: .none).utf8)).asset.sha256)
+        XCTAssertNil(try ReleaseFeed.parse(Data(UpdateFixtures.releaseJSON(digest: .some(nil)).utf8)).asset.sha256)
+        let hex = UpdateFixtures.abcSHA256
+        XCTAssertEqual(try ReleaseFeed.parse(Data(UpdateFixtures.releaseJSON(digest: "sha256:" + hex).utf8)).asset.sha256, hex)
+    }
+
+    func testAMalformedDigestIsRefused() {
+        let hex = UpdateFixtures.abcSHA256
+        let malformed = [
+            "",
+            hex,
+            "sha256:" + hex.uppercased(),
+            "sha512:" + hex,
+            "sha1:a9993e364706816aba3e25717850c26c9cd0d89d",
+            "sha256:" + String(hex.dropLast()),
+            "sha256:" + hex + "0",
+            "sha256:" + hex + "\n",
+            "sha256: " + hex,
+            "sha256:" + String(hex.dropLast()) + "g",
+        ]
+        for digest in malformed {
+            assertNotInstallable(UpdateFixtures.releaseJSON(digest: .some(digest)))
+        }
     }
 
     func testParsesAPrereleaseVersionTagWhenTheReleaseIsPublished() throws {

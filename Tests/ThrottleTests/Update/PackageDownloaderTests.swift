@@ -43,6 +43,9 @@ final class PackageDownloaderTests: XCTestCase {
             "https://example.com/x",
             "ftp://github.com/x",
             "file:///tmp/x.pkg",
+            "https://github.com:8443/x",
+            "https://github.com:443/x",
+            "https://release-assets.githubusercontent.com:444/x",
         ]
         for text in refused {
             XCTAssertFalse(PackageDownloader.isAllowed(URL(string: text)), text)
@@ -112,7 +115,7 @@ final class PackageDownloaderTests: XCTestCase {
     }
 
     func testUnapprovedAssetURLIsRefusedBeforeAnyRequest() async {
-        let asset = ReleaseAsset(name: "Throttle-0.2.0.pkg", downloadURL: URL(string: "https://example.com/Throttle-0.2.0.pkg")!, size: 64)
+        let asset = ReleaseAsset(name: "Throttle-0.2.0.pkg", downloadURL: URL(string: "https://example.com/Throttle-0.2.0.pkg")!, size: 64, sha256: nil)
         await assertDownloadFails(asset, containing: "not an approved download host")
         XCTAssertNil(StubPackageProtocol.lastRequest)
     }

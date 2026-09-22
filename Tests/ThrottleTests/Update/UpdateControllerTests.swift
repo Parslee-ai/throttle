@@ -72,18 +72,17 @@ final class UpdateControllerTests: XCTestCase {
     func testUnknownCurrentVersionFailsWithoutARequest() async {
         let h = harness(current: nil)
         await h.controller.checkForUpdates().value
-        XCTAssertEqual(h.controller.state, .failed(UpdateError.unknownCurrentVersion.userMessage, canOpenInInstaller: false))
+        XCTAssertEqual(h.controller.state, .failed(UpdateError.unknownCurrentVersion.userMessage))
         XCTAssertEqual(h.client.requests.count, 0)
     }
 
     func testRateLimitedCheckFailsReadably() async {
         let h = harness(responses: [.success(HTTPResponse(statusCode: 429, headers: ["retry-after": "60"], body: Data()))])
         await h.controller.checkForUpdates().value
-        guard case .failed(let message, let canOpen) = h.controller.state else {
+        guard case .failed(let message) = h.controller.state else {
             return XCTFail("got \(h.controller.state)")
         }
         XCTAssertTrue(message.contains("Try again in 1 minute."), message)
-        XCTAssertFalse(canOpen)
     }
 
     func testNetworkFailureIsRedacted() async {
@@ -92,12 +91,20 @@ final class UpdateControllerTests: XCTestCase {
         }
         let h = harness(responses: [.failure(Leaky())])
         await h.controller.checkForUpdates().value
-        guard case .failed(let message, _) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
+        guard case .failed(let message) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
         XCTAssertFalse(message.contains("abc.def.ghi"), message)
         XCTAssertTrue(message.contains("[redacted]"), message)
     }
 
     // MARK: Installing
+
+    private func assertDownloadsDeleted(_ h: Harness, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(h.downloader.writtenFiles.isEmpty, "something was downloaded", file: file, line: line)
+        for written in h.downloader.writtenFiles {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: written.path),
+                           "\(written.lastPathComponent) is left on disk", file: file, line: line)
+        }
+    }
 
     func testAvailableThenInstallThenRelaunch() async throws {
         let h = harness()
@@ -108,15 +115,22 @@ final class UpdateControllerTests: XCTestCase {
 
         XCTAssertEqual(h.controller.state, .relaunching)
         XCTAssertEqual(h.downloader.count, 1)
-        let verification = try XCTUnwrap(h.verifier.verifications.first)
-        XCTAssertEqual(verification.0.lastPathComponent, "Throttle-0.2.0.pkg")
-        XCTAssertEqual(verification.1, UpdateFixtures.team)
+        let (verifiedFile, expectation) = try XCTUnwrap(h.verifier.verifications.first)
+        XCTAssertEqual(verifiedFile.lastPathComponent, "Throttle-0.2.0.pkg")
+        XCTAssertEqual(expectation, PackageExpectation(
+            teamID: UpdateFixtures.team,
+            version: SemanticVersion("0.2.0")!,
+            size: 64,
+            sha256: UpdateFixtures.zeroSHA256
+        ), "the listing's size and digest and the running app's team are what the package must match")
         let install = try XCTUnwrap(h.installer.installs.first)
-        XCTAssertEqual(install.0, verification.0, "installs exactly the file that was verified")
-        XCTAssertEqual(install.1, "0.2.0")
-        XCTAssertEqual(install.2, UpdateFixtures.team)
+        XCTAssertEqual(install.url, verifiedFile, "installs exactly the file that was verified")
+        XCTAssertEqual(install.version.text, "0.2.0")
+        XCTAssertEqual(install.teamID, UpdateFixtures.team)
+        XCTAssertEqual(install.size, 64)
+        XCTAssertEqual(install.sha256, UpdateFixtures.zeroSHA256)
         XCTAssertEqual(h.installer.relaunchCount, 1)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: install.0.path), "the installed package is cleaned up")
+        assertDownloadsDeleted(h)
     }
 
     func testInstallWithoutAnAvailableUpdateDoesNothing() async {
@@ -129,45 +143,54 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertEqual(h.downloader.count, 0)
     }
 
-    func testCancelledPromptShowsCancelledAndCanInstallAgain() async {
+    func testCancelledPromptShowsCancelledAndInstallsAgainFromScratch() async {
         let h = harness()
         h.installer.outcomes = [.cancel, .success]
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
         XCTAssertEqual(h.controller.state, .cancelled)
         XCTAssertEqual(h.installer.relaunchCount, 0)
+        assertDownloadsDeleted(h)
 
         await h.controller.installUpdate().value
         XCTAssertEqual(h.controller.state, .relaunching)
         XCTAssertEqual(h.installer.installs.count, 2)
+        XCTAssertEqual(h.downloader.count, 2, "a second attempt downloads again")
+        XCTAssertEqual(h.verifier.verifications.count, 2, "and verifies again")
     }
 
-    func testInstallFailureIsRedactedAndOffersInstaller() async {
+    func testInstallFailureIsRedactedAndRetryStartsOver() async {
         let h = harness()
-        h.installer.outcomes = [.fail("installer said Bearer sk-live-secret-token-value")]
+        h.installer.outcomes = [.fail("installer said Bearer sk-live-secret-token-value"), .success]
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
 
-        guard case .failed(let message, let canOpen) = h.controller.state else {
+        guard case .failed(let message) = h.controller.state else {
             return XCTFail("got \(h.controller.state)")
         }
         XCTAssertTrue(message.hasPrefix("The update couldn't be installed:"), message)
         XCTAssertFalse(message.contains("sk-live-secret-token-value"), message)
-        XCTAssertTrue(canOpen)
         XCTAssertEqual(h.installer.relaunchCount, 0)
+        assertDownloadsDeleted(h)
 
-        h.controller.openInInstaller()
-        XCTAssertEqual(h.installer.openedPackages.map(\.lastPathComponent), ["Throttle-0.2.0.pkg"])
-    }
-
-    func testRetryAfterAnInstallFailureInstallsAgain() async {
-        let h = harness()
-        h.installer.outcomes = [.fail("disk full"), .success]
-        await h.controller.checkForUpdates().value
-        await h.controller.installUpdate().value
         await h.controller.retry().value
         XCTAssertEqual(h.controller.state, .relaunching)
         XCTAssertEqual(h.client.requests.count, 1, "retrying an install does not re-check")
+        XCTAssertEqual(h.downloader.count, 2, "retry downloads afresh")
+        XCTAssertEqual(h.verifier.verifications.count, 2, "retry verifies from scratch")
+    }
+
+    func testARootRefusalIsAVerificationFailureAndDeletesTheDownload() async {
+        let h = harness()
+        h.installer.outcomes = [.refuse("the package copy is not Throttle 0.2.0")]
+        await h.controller.checkForUpdates().value
+        await h.controller.installUpdate().value
+
+        XCTAssertEqual(h.controller.state, .failed(
+            "The downloaded update failed verification and was not installed: the package copy is not Throttle 0.2.0"
+        ))
+        XCTAssertEqual(h.installer.relaunchCount, 0)
+        assertDownloadsDeleted(h)
     }
 
     func testVerificationFailureNeverInstalls() async {
@@ -176,14 +199,12 @@ final class UpdateControllerTests: XCTestCase {
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
 
-        guard case .failed(let message, let canOpen) = h.controller.state else {
+        guard case .failed(let message) = h.controller.state else {
             return XCTFail("got \(h.controller.state)")
         }
         XCTAssertTrue(message.contains("different developer"), message)
-        XCTAssertFalse(canOpen, "an unverified package is never offered to Installer")
         XCTAssertEqual(h.installer.installs.count, 0)
-        h.controller.openInInstaller()
-        XCTAssertEqual(h.installer.openedPackages, [])
+        assertDownloadsDeleted(h)
     }
 
     func testAnAdHocBuildIsRefusedBeforeDownloading() async {
@@ -191,7 +212,7 @@ final class UpdateControllerTests: XCTestCase {
         h.verifier.teamID = nil
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
-        XCTAssertEqual(h.controller.state, .failed(UpdateError.unsignedApp.userMessage, canOpenInInstaller: false))
+        XCTAssertEqual(h.controller.state, .failed(UpdateError.unsignedApp.userMessage))
         XCTAssertEqual(h.downloader.count, 0)
     }
 
@@ -200,7 +221,7 @@ final class UpdateControllerTests: XCTestCase {
         h.downloader.error = .download("received 10 bytes but the release lists 64")
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
-        guard case .failed(let message, false) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
+        guard case .failed(let message) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
         XCTAssertTrue(message.contains("couldn't be downloaded"), message)
         XCTAssertEqual(h.verifier.verifications.count, 0)
     }
@@ -210,7 +231,7 @@ final class UpdateControllerTests: XCTestCase {
         h.installer.relaunchError = .relaunch("no /bin/sh")
         await h.controller.checkForUpdates().value
         await h.controller.installUpdate().value
-        guard case .failed(let message, _) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
+        guard case .failed(let message) = h.controller.state else { return XCTFail("got \(h.controller.state)") }
         XCTAssertTrue(message.contains("The update was installed"), message)
     }
 

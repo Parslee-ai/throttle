@@ -7,6 +7,9 @@ struct ReleaseAsset: Equatable, Sendable {
     let downloadURL: URL
     /// The byte count the release listing reports. The download must match it.
     let size: Int
+    /// The lowercase hex SHA-256 GitHub reports for the asset (its `digest`
+    /// field), when the listing carries one. The download must match it.
+    let sha256: String?
 }
 
 /// A published, installable release.
@@ -36,6 +39,9 @@ struct ReleaseFeed: Sendable {
     static let maxFeedBytes = 1024 * 1024
     /// Largest package the updater will accept. A real one is under 2 MB.
     static let maxPackageBytes = 200 * 1024 * 1024
+
+    /// GitHub's asset digest: `sha256:` and 64 lowercase hex digits.
+    static let digestPattern = #"^sha256:[0-9a-f]{64}$"#
 
     let client: any HTTPClient
     /// Sent as `User-Agent: Throttle/<version>`, which GitHub's API requires.
@@ -123,13 +129,15 @@ struct ReleaseFeed: Sendable {
             let name: String
             let browser_download_url: String
             let size: Int
+            let digest: String?
         }
     }
 
     /// Decodes a release listing and accepts it only if every field names
     /// exactly what `scripts/release.sh` publishes: a published, non-draft,
     /// non-prerelease release tagged `v<version>` with a plain version number,
-    /// carrying `Throttle-<version>.pkg` at its canonical download URL.
+    /// carrying `Throttle-<version>.pkg` at its canonical download URL, with a
+    /// well-formed SHA-256 digest when GitHub lists one.
     static func parse(_ data: Data) throws -> AvailableRelease {
         let payload: Payload
         do {
@@ -166,9 +174,19 @@ struct ReleaseFeed: Sendable {
         guard asset.size > 0, asset.size <= maxPackageBytes else {
             throw UpdateError.noInstallableUpdate("Release \(version.text)'s installer package has an implausible size, so Throttle won't install it.")
         }
+        // A listing without a digest is still installable: the app hashes the
+        // download itself and root re-checks that hash. A digest in any other
+        // shape than GitHub's is refused rather than ignored.
+        var sha256: String?
+        if let digest = asset.digest {
+            guard WholeMatch.matches(digestPattern, digest) else {
+                throw UpdateError.noInstallableUpdate("Release \(version.text)'s installer package has a checksum Throttle can't read, so Throttle won't install it.")
+            }
+            sha256 = String(digest.dropFirst("sha256:".count))
+        }
         return AvailableRelease(
             version: version,
-            asset: ReleaseAsset(name: asset.name, downloadURL: url, size: asset.size)
+            asset: ReleaseAsset(name: asset.name, downloadURL: url, size: asset.size, sha256: sha256)
         )
     }
 }
