@@ -154,13 +154,12 @@ final class AccountStoreTests: XCTestCase {
         var ids = await store.accounts().map(\.id)
         XCTAssertEqual(ids, [c.id, a.id, b.id])
 
-        try await store.moveDown(id: c.id)
-        try await store.moveUp(id: b.id)
+        try await store.move(id: c.id, to: 2)
+        try await store.move(id: b.id, to: 1)
         ids = await store.accounts().map(\.id)
         XCTAssertEqual(ids, [a.id, b.id, c.id])
 
-        try await store.moveUp(id: a.id)
-        try await store.moveDown(id: c.id)
+        try await store.move(id: a.id, to: -3)
         try await store.move(id: b.id, to: 99)
         let reloaded = try await makeStore().load()
         XCTAssertEqual(reloaded.map(\.id), [a.id, c.id, b.id])

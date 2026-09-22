@@ -65,12 +65,17 @@ final class LoginFlow: Identifiable {
 /// settings, and publishes the two things every view reads: `accounts` in
 /// display order and `statuses` by account id.
 ///
+/// Display order is `AccountOrder.grouped`: provider sections, then the
+/// user's order within each. The detail window, the bar's number, and the
+/// rotation all read this one list.
+///
 /// Views never touch the store or the scheduler directly. Every mutation goes
 /// through a method here, and every error it produces is redacted before it
 /// becomes `lastError`.
 @MainActor
 @Observable
 final class AppModel {
+    /// Every account in display order (`AccountOrder.grouped`).
     private(set) var accounts: [Account] = []
     private(set) var statuses: [UUID: CachedStatus] = [:]
     /// The newest successful fetch across all accounts, for the footer.
@@ -94,6 +99,9 @@ final class AppModel {
     @ObservationIgnored private let diagnostics: Diagnostics
     @ObservationIgnored private let httpClient = URLSessionHTTPClient()
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    /// The store's own order (`sortIndex`), where providers may interleave.
+    /// Section moves are translated against it.
+    @ObservationIgnored private var storeOrder: [Account] = []
     @ObservationIgnored private var started = false
 
     init(settings: AppSettings = AppSettings()) {
@@ -170,8 +178,10 @@ final class AppModel {
 
     private func publishAccounts() async {
         let list = await store.accounts()
-        accounts = list
-        rotation.setAccounts(list)
+        storeOrder = list
+        let ordered = AccountOrder.grouped(list)
+        accounts = ordered
+        rotation.setAccounts(ordered)
     }
 
     private func apply(snapshot: [UUID: CachedStatus]) {
@@ -277,21 +287,27 @@ final class AppModel {
         }
     }
 
+    /// Moves the account one place earlier within its provider section.
     func moveUp(_ account: Account) {
-        Task {
-            do {
-                try await store.moveUp(id: account.id)
-                await publishAccounts()
-            } catch {
-                report(error, context: "Could not reorder the accounts")
-            }
-        }
+        guard let position = sectionPosition(of: account) else { return }
+        move(account, toSectionPosition: position - 1)
     }
 
+    /// Moves the account one place later within its provider section.
     func moveDown(_ account: Account) {
+        guard let position = sectionPosition(of: account) else { return }
+        move(account, toSectionPosition: position + 1)
+    }
+
+    /// Moves an account to a position within its provider section and
+    /// persists the new order (ISC-92). The account never leaves its section.
+    func move(_ account: Account, toSectionPosition position: Int) {
+        guard let index = AccountOrder.storeIndex(moving: account.id, toSectionPosition: position, storeOrder: storeOrder) else {
+            return
+        }
         Task {
             do {
-                try await store.moveDown(id: account.id)
+                try await store.move(id: account.id, to: index)
                 await publishAccounts()
             } catch {
                 report(error, context: "Could not reorder the accounts")
@@ -299,26 +315,32 @@ final class AppModel {
         }
     }
 
-    /// Moves an account to a position in display order and persists the new
-    /// order (ISC-92).
-    func move(id: UUID, to index: Int) {
-        Task {
-            do {
-                try await store.move(id: id, to: index)
-                await publishAccounts()
-            } catch {
-                report(error, context: "Could not reorder the accounts")
-            }
-        }
-    }
-
-    /// A list drag: `source` and `destination` in SwiftUI's `onMove` terms,
-    /// where the destination is an insertion point in the pre-move list.
-    func move(from source: IndexSet, to destination: Int) {
-        guard let from = source.first, accounts.indices.contains(from) else { return }
+    /// A list drag inside one provider section: `source` and `destination`
+    /// in SwiftUI's `onMove` terms for that section's rows, where the
+    /// destination is an insertion point in the pre-move list.
+    func move(in provider: Provider, from source: IndexSet, to destination: Int) {
+        let section = accounts.filter { $0.provider == provider }
+        guard let from = source.first, section.indices.contains(from) else { return }
         let target = from < destination ? destination - 1 : destination
         guard target != from else { return }
-        move(id: accounts[from].id, to: target)
+        move(section[from], toSectionPosition: target)
+    }
+
+    private func sectionPosition(of account: Account) -> Int? {
+        accounts.filter { $0.provider == account.provider }.firstIndex { $0.id == account.id }
+    }
+
+    /// Names the account, or clears its name when `name` is blank, and
+    /// persists it. The email stays as it was.
+    func rename(_ account: Account, to name: String) {
+        Task {
+            do {
+                try await store.setNickname(id: account.id, to: name)
+                await publishAccounts()
+            } catch {
+                report(error, context: "Could not rename the account")
+            }
+        }
     }
 
     func planLabel(for account: Account) -> String? {

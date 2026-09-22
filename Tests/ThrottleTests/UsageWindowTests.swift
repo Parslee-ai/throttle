@@ -10,6 +10,15 @@ final class UsageWindowTests: XCTestCase {
         XCTAssertFalse(primary.isLane)
     }
 
+    func testModelScopedKeysAreRecognisedByPrefix() {
+        let scoped = UsageWindow(key: UsageWindow.scopedPrefix + "Fable", label: "Fable", usedPercent: 1, resetsAt: nil, durationSeconds: 604_800)
+        let weekly = UsageWindow(key: "7d", label: "Weekly", usedPercent: 1, resetsAt: nil, durationSeconds: 604_800)
+        XCTAssertEqual(UsageWindow.scopedPrefix, "scoped:")
+        XCTAssertTrue(scoped.isModelScoped)
+        XCTAssertFalse(scoped.isLane)
+        XCTAssertFalse(weekly.isModelScoped)
+    }
+
     /// ISC-71 / D-8: lane labels are derived from the reported window length,
     /// never from a hardcoded lane name, because providers have switched lanes
     /// off mid-month.

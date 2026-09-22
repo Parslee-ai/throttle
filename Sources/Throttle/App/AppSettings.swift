@@ -23,7 +23,6 @@ final class AppSettings {
     enum Key {
         static let pollInterval = "pollInterval"
         static let rotationInterval = "rotationInterval"
-        static let showRemaining = "showRemaining"
         static let launchAtLogin = "launchAtLogin"
         static let accountMeta = "accountMeta"
     }
@@ -54,11 +53,6 @@ final class AppSettings {
         }
     }
 
-    /// Show the percentage remaining instead of the percentage used.
-    var showRemaining: Bool {
-        didSet { defaults.set(showRemaining, forKey: Key.showRemaining) }
-    }
-
     /// The user's last choice for launch at login. The system's answer is
     /// `SMAppService.mainApp.status`; `AppModel` reconciles the two.
     var launchAtLogin: Bool {
@@ -76,7 +70,6 @@ final class AppSettings {
         pollIntervalStorage = Self.clamp(storedPoll ?? PollSettings.defaultInterval, to: Self.pollIntervalRange, default: PollSettings.defaultInterval)
         let storedRotation = defaults.object(forKey: Key.rotationInterval) as? Double
         rotationIntervalStorage = Self.clamp(storedRotation ?? Self.defaultRotationInterval, to: Self.rotationIntervalRange, default: Self.defaultRotationInterval)
-        showRemaining = defaults.bool(forKey: Key.showRemaining)
         launchAtLogin = defaults.bool(forKey: Key.launchAtLogin)
         accountMeta = Self.loadAccountMeta(from: defaults)
     }

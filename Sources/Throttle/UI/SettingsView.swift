@@ -46,8 +46,6 @@ struct SettingsView: View {
                 }
             }
 
-            Toggle("Show percentage remaining instead of used", isOn: $settings.showRemaining)
-
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Launch at login", isOn: Binding(
                     get: { model.launchAtLoginStatus == .enabled },

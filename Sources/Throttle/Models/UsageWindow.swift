@@ -23,6 +23,14 @@ struct UsageWindow: Codable, Hashable, Sendable {
     /// True for a secondary lane window.
     var isLane: Bool { key.hasPrefix(Self.lanePrefix) }
 
+    /// Keys with this prefix belong to a window that counts one model only.
+    /// Its `label` is the model name exactly as the payload reported it, so
+    /// the UI can title the window without ever naming a model itself.
+    static let scopedPrefix = "scoped:"
+
+    /// True for a model-scoped window.
+    var isModelScoped: Bool { key.hasPrefix(Self.scopedPrefix) }
+
     init(
         key: String,
         label: String,

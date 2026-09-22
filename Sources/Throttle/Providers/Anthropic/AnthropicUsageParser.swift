@@ -77,7 +77,7 @@ enum AnthropicUsageParser {
             case "weekly_scoped":
                 let label = boundedLabel(scopeDisplayName(object))
                 candidate = makeWindow(
-                    key: "scoped:\(label)",
+                    key: UsageWindow.scopedPrefix + label,
                     label: label,
                     duration: weeklySeconds,
                     percentValue: object["percent"],
@@ -147,7 +147,7 @@ enum AnthropicUsageParser {
             guard let object = root[key] as? [String: Any] else { continue }
             let suffix = String(key.dropFirst(prefix.count))
             let label = boundedLabel(capitalizeFirst(suffix))
-            let windowKey = "scoped:\(label)"
+            let windowKey = UsageWindow.scopedPrefix + label
             guard !seenKeys.contains(windowKey) else { continue }
             if let window = makeWindow(
                 key: windowKey,

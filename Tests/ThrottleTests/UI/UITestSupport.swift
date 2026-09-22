@@ -5,17 +5,30 @@ import Foundation
 enum UIFixtures {
     static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    static func account(_ email: String, provider: Provider = .anthropic, sortIndex: Int = 0) -> Account {
-        Account(provider: provider, email: email, sortIndex: sortIndex, addedAt: now)
+    static func account(
+        _ email: String,
+        provider: Provider = .anthropic,
+        sortIndex: Int = 0,
+        nickname: String? = nil
+    ) -> Account {
+        Account(provider: provider, email: email, nickname: nickname, sortIndex: sortIndex, addedAt: now)
     }
 
-    static func window(_ key: String, label: String, used: Double, resetsIn: TimeInterval? = 3600) -> UsageWindow {
+    /// A window of `seconds` length; by default `5h` keys are 5 hours and
+    /// everything else is 7 days.
+    static func window(
+        _ key: String,
+        label: String,
+        used: Double,
+        resetsIn: TimeInterval? = 3600,
+        seconds: Int? = nil
+    ) -> UsageWindow {
         UsageWindow(
             key: key,
             label: label,
             usedPercent: used,
             resetsAt: resetsIn.map { now.addingTimeInterval($0) },
-            durationSeconds: key == "5h" ? 18_000 : 604_800
+            durationSeconds: seconds ?? (key == "5h" ? 18_000 : 604_800)
         )
     }
 
@@ -24,7 +37,9 @@ enum UIFixtures {
         windows: [UsageWindow],
         state: AccountState = .ok,
         isStale: Bool = false,
-        fetchedAt: Date = now
+        fetchedAt: Date = now,
+        planLabel: String? = nil,
+        resetCreditsAvailable: Int? = nil
     ) -> CachedStatus {
         let status = AccountStatus(
             accountID: account.id,
@@ -32,7 +47,9 @@ enum UIFixtures {
             email: account.email,
             windows: windows,
             fetchedAt: fetchedAt,
-            state: state
+            state: state,
+            planLabel: planLabel,
+            resetCreditsAvailable: resetCreditsAvailable
         )
         return CachedStatus(
             status: status,
