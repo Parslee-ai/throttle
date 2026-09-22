@@ -15,6 +15,9 @@ struct OpenAIUsageSnapshot: Hashable, Sendable {
     var email: String?
     var planType: String?
     var accountID: String?
+    /// `rate_limit_reset_credits.available_count`: manual resets the account
+    /// has banked. `nil` when the payload carries no usable count.
+    var resetCreditsAvailable: Int? = nil
 }
 
 /// Maps the `wham/usage` JSON onto `UsageWindow`s.
@@ -48,7 +51,8 @@ enum OpenAIUsageParser {
             additionalWindows: additional,
             email: payload.email,
             planType: payload.planType,
-            accountID: payload.accountID
+            accountID: payload.accountID,
+            resetCreditsAvailable: payload.resetCredits?.availableCount.flatMap { $0 >= 0 ? $0 : nil }
         )
     }
 
@@ -94,6 +98,7 @@ enum OpenAIUsageParser {
         var accountID: String?
         var rateLimit: RateLimit?
         var additionalRateLimits: [AdditionalLane]?
+        var resetCredits: ResetCredits?
 
         enum CodingKeys: String, CodingKey {
             case email
@@ -101,6 +106,26 @@ enum OpenAIUsageParser {
             case accountID = "account_id"
             case rateLimit = "rate_limit"
             case additionalRateLimits = "additional_rate_limits"
+            case resetCredits = "rate_limit_reset_credits"
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            email = try container.decodeIfPresent(String.self, forKey: .email)
+            planType = try container.decodeIfPresent(String.self, forKey: .planType)
+            accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
+            rateLimit = try container.decodeIfPresent(RateLimit.self, forKey: .rateLimit)
+            additionalRateLimits = try container.decodeIfPresent([AdditionalLane].self, forKey: .additionalRateLimits)
+            // A display extra: an odd shape here must not cost the windows.
+            resetCredits = try? container.decodeIfPresent(ResetCredits.self, forKey: .resetCredits)
+        }
+    }
+
+    private struct ResetCredits: Decodable {
+        var availableCount: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case availableCount = "available_count"
         }
     }
 

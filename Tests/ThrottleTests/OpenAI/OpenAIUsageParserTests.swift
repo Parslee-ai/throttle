@@ -110,6 +110,32 @@ final class OpenAIUsageParserTests: XCTestCase {
         }
     }
 
+    /// The manual-reset count rides along from `rate_limit_reset_credits`.
+    func testParsesTheResetCreditCount() throws {
+        let snapshot = try OpenAIUsageParser.parse(try OpenAIFixtures.whamUsage())
+        XCTAssertEqual(snapshot.resetCreditsAvailable, 1)
+    }
+
+    func testResetCreditCountIsNilWhenAbsentOrUnusable() throws {
+        let window = #""rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": 5}, "secondary_window": null}"#
+        XCTAssertNil(try OpenAIUsageParser.parse(Data("{\(window)}".utf8)).resetCreditsAvailable, "absent")
+
+        let oddShapes = [
+            #""rate_limit_reset_credits": "many""#,
+            #""rate_limit_reset_credits": {"available_count": "two"}"#,
+            #""rate_limit_reset_credits": {"available_count": -1}"#,
+            #""rate_limit_reset_credits": null"#,
+        ]
+        for credits in oddShapes {
+            let snapshot = try OpenAIUsageParser.parse(Data("{\(credits), \(window)}".utf8))
+            XCTAssertNil(snapshot.resetCreditsAvailable, credits)
+            XCTAssertEqual(snapshot.windows.count, 1, "an odd credit shape never costs the windows: \(credits)")
+        }
+
+        let two = #"{"rate_limit_reset_credits": {"available_count": 2, "applicable_available_count": 0}, "# + window + "}"
+        XCTAssertEqual(try OpenAIUsageParser.parse(Data(two.utf8)).resetCreditsAvailable, 2)
+    }
+
     func testKeyDerivation() {
         XCTAssertEqual(OpenAIUsageParser.key(forDurationSeconds: 18_000), "5h")
         XCTAssertEqual(OpenAIUsageParser.key(forDurationSeconds: 604_800), "7d")

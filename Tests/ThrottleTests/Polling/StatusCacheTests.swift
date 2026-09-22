@@ -35,6 +35,23 @@ final class StatusCacheTests: XCTestCase {
         XCTAssertEqual(entry?.status.planLabel, "max")
     }
 
+    func testResetCreditCountSurvivesAFailedAttemptAndASkip() async {
+        let now = clock.now()
+        let withCredits = AccountStatus(
+            accountID: account.id, provider: .anthropic, email: account.email,
+            windows: [UsageWindow(key: "7d", label: "Weekly", usedPercent: 1, resetsAt: nil, durationSeconds: 604_800)],
+            fetchedAt: now, state: .ok, resetCreditsAvailable: 2
+        )
+        await cache.recordSuccess(withCredits, at: now)
+        await cache.recordFailure(account: account, state: .error("boom"), error: "boom", at: now.addingTimeInterval(1), markStale: true)
+        var entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetCreditsAvailable, 2)
+
+        await cache.recordSkipped(account: account, until: now.addingTimeInterval(600), rateLimited: true, at: now.addingTimeInterval(2))
+        entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetCreditsAvailable, 2)
+    }
+
     func testSuccessIsCurrent() async {
         let now = clock.now()
         await cache.recordSuccess(status(percent: 40, at: now), at: now)
