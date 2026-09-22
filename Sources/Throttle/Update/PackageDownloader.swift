@@ -42,9 +42,11 @@ final class PackageDownloader: NSObject, PackageDownloading, URLSessionTaskDeleg
         super.init()
     }
 
-    /// Whether a URL is somewhere a package download may go.
+    /// Whether a URL is somewhere a package download may go: HTTPS, an
+    /// approved host, and the default port only.
     static func isAllowed(_ url: URL?) -> Bool {
-        guard let url, url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        guard let url, url.scheme?.lowercased() == "https", url.port == nil,
+              let host = url.host?.lowercased() else { return false }
         return allowedHosts.contains(host)
     }
 

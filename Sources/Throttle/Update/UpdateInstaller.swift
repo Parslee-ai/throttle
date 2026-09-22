@@ -3,27 +3,29 @@ import Foundation
 
 /// Installs a verified package and brings the new version up.
 protocol UpdateInstalling: Sendable {
-    /// Installs the package at `url` with administrator rights. Throws
-    /// `InstallCancelled` when the user dismisses the password prompt and
+    /// Installs `package` with administrator rights. Throws `InstallCancelled`
+    /// when the user dismisses the password prompt, `UpdateError.verification`
+    /// when the root step refuses its copy of the package, and
     /// `UpdateError.install` for any other failure.
-    func install(packageAt url: URL, version: SemanticVersion, teamID: String) async throws
+    func install(_ package: VerifiedPackage) async throws
 
     /// Starts the installed copy once this process has exited, then quits.
     /// Throws `UpdateError.relaunch` when the relauncher could not be started,
     /// in which case the app keeps running.
     @MainActor func relaunch() throws
-
-    /// Opens the package in Installer so the user can finish by hand.
-    @MainActor func openInInstaller(_ url: URL)
 }
 
 /// Production installer: the standard macOS administrator prompt, through
 /// `osascript` and `do shell script ... with administrator privileges`.
 ///
-/// The root shell never trusts the file the user-level app verified. It copies
-/// the package into a fresh root-owned directory and verifies that copy again
-/// before `installer` reads it, so nothing running as the user can swap the
-/// file between Throttle's check and root's install.
+/// The root shell never trusts the file the user-level app verified. It
+/// copies at most the verified size into a fresh root-owned directory, then
+/// requires that copy to have exactly the verified size and SHA-256, the
+/// Developer ID Installer signature of the running app's team, Apple's
+/// notarization, a Distribution naming Throttle at exactly the version being
+/// installed, and no install scripts. Only then does `installer` read it, so
+/// nothing running as the user can swap in other bytes, another product signed
+/// by the same team, or an older Throttle.
 struct UpdateInstaller: UpdateInstalling {
     static let osascriptPath = "/usr/bin/osascript"
     /// Where `scripts/package.sh` installs the app, and so what gets relaunched.
@@ -31,14 +33,23 @@ struct UpdateInstaller: UpdateInstalling {
     /// relaunch itself, the old version, instead of the one just installed.
     static let installedAppPath = "/Applications/Throttle.app"
 
+    /// The exit status the root script uses for every refusal, so the app can
+    /// tell "the copy failed a check" from "installer failed".
+    static let refusalStatus: Int32 = 65
+
+    /// Runs the root script with an empty environment apart from `PATH`, so no
+    /// variable inherited from the user's session (for example one that loads
+    /// code into `shasum`'s Perl) reaches anything running as root.
+    static let rootCommandPrefix = "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -c "
+
     let runner: any CommandRunning
 
     init(runner: any CommandRunning = ProcessCommandRunner()) {
         self.runner = runner
     }
 
-    func install(packageAt url: URL, version: SemanticVersion, teamID: String) async throws {
-        let script = try Self.appleScript(packagePath: url.path, version: version, teamID: teamID)
+    func install(_ package: VerifiedPackage) async throws {
+        let script = try Self.appleScript(for: package)
         let result: CommandResult
         do {
             result = try await runner.run(Self.osascriptPath, ["-e", script])
@@ -48,13 +59,18 @@ struct UpdateInstaller: UpdateInstalling {
         try Self.interpret(result)
     }
 
-    /// Maps `osascript`'s exit to success, `InstallCancelled`, or a trimmed
-    /// `UpdateError.install`.
+    /// Maps `osascript`'s exit to success, `InstallCancelled`, a root-side
+    /// `UpdateError.verification`, or a trimmed `UpdateError.install`.
     static func interpret(_ result: CommandResult) throws {
         if result.status == 0 { return }
         let output = result.combinedOutput
         if output.contains("(-128)") || output.localizedCaseInsensitiveContains("User canceled") {
             throw InstallCancelled()
+        }
+        // `do shell script` ends its error with the script's exit status.
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasSuffix("(\(refusalStatus))") {
+            throw UpdateError.verification(conciseFailure(output, status: result.status))
         }
         throw UpdateError.install(conciseFailure(output, status: result.status))
     }
@@ -79,42 +95,76 @@ struct UpdateInstaller: UpdateInstalling {
     // MARK: Building the script
 
     /// The AppleScript handed to `osascript -e`.
-    static func appleScript(packagePath: String, version: SemanticVersion, teamID: String) throws -> String {
+    static func appleScript(for package: VerifiedPackage) throws -> String {
+        let shell = try rootShellScript(
+            packagePath: package.url.path,
+            teamID: package.teamID,
+            version: package.version,
+            size: package.size,
+            sha256: package.sha256
+        )
+        let command = rootCommandPrefix + shellQuote(shell)
+        let prompt = "Throttle needs an administrator password to install version \(package.version.text)."
+        return "do shell script \(appleScriptStringLiteral(command)) with prompt \(appleScriptStringLiteral(prompt)) with administrator privileges"
+    }
+
+    /// The `sh` script root runs. Every pin is validated before it is
+    /// embedded, and every embedded value is single-quoted.
+    static func rootShellScript(
+        packagePath: String,
+        teamID: String,
+        version: SemanticVersion,
+        size: Int,
+        sha256: String
+    ) throws -> String {
+        guard PackageVerifier.isValidTeamID(teamID) else {
+            throw UpdateError.install("the developer team could not be confirmed")
+        }
         guard SemanticVersion.isValid(version.text) else {
             throw UpdateError.install("the update's version number is not a plain version")
         }
-        let shell = try rootShellScript(packagePath: packagePath, teamID: teamID)
-        let prompt = "Throttle needs an administrator password to install version \(version.text)."
-        return "do shell script \(appleScriptStringLiteral(shell)) with prompt \(appleScriptStringLiteral(prompt)) with administrator privileges"
-    }
-
-    /// The `sh` script root runs. Every path is single-quoted; the team is
-    /// validated before it is embedded; the package is re-verified as a
-    /// root-owned copy before `installer` sees it.
-    static func rootShellScript(packagePath: String, teamID: String) throws -> String {
-        guard PackageVerifier.isValidTeamID(teamID) else {
-            throw UpdateError.install("the developer team could not be confirmed")
+        guard PackageVerifier.isValidSHA256(sha256) else {
+            throw UpdateError.install("the package's checksum is not a SHA-256")
+        }
+        guard size > 0, size <= ReleaseFeed.maxPackageBytes else {
+            throw UpdateError.install("the package size is out of range")
         }
         guard packagePath.hasPrefix("/"), !packagePath.contains("\u{0}") else {
             throw UpdateError.install("the package path is not absolute")
         }
-        let pkg = shellQuote(packagePath)
-        let status = shellQuote(PackageVerifier.developerIDStatus)
-        let leafPrefix = shellQuote(PackageVerifier.installerCertificatePrefix)
-        let team = shellQuote("(\(teamID))")
-        let notarized = shellQuote(PackageVerifier.notarizedSource)
+
+        func refuse(_ reason: String) -> String {
+            "{ echo \(shellQuote(reason)) >&2; exit \(refusalStatus); }"
+        }
+        let q = shellQuote
+        let product = PackageVerifier.productIdentifier
+        let productQuery = "count(//pkg-ref) > 0 and count(//pkg-ref[not(@id=\"\(product)\")]) = 0"
+        let versionQuery = "count(//pkg-ref[@version]) = 1 and count(//pkg-ref[@id=\"\(product)\"][@version=\"\(version.text)\"]) = 1"
+
         return [
             "set -e",
+            "src=\(q(packagePath))",
+            "if [ -L \"$src\" ] || [ ! -f \"$src\" ]; then \(refuse("the downloaded package is not a regular file")); fi",
             "dir=$(/usr/bin/mktemp -d /private/tmp/throttle-update.XXXXXX)",
             "trap '/bin/rm -rf \"$dir\"' EXIT",
             "copy=\"$dir/Throttle.pkg\"",
-            "/bin/cp \(pkg) \"$copy\"",
-            "sig=$(/usr/sbin/pkgutil --check-signature \"$copy\") || { echo 'The package copy has no valid signature.' >&2; exit 65; }",
-            "case \"$sig\" in *\(status)*) ;; *) echo 'The package copy is not Developer ID signed.' >&2; exit 65 ;; esac",
+            "/usr/bin/head -c \(size + 1) \"$src\" > \"$copy\"",
+            "[ \"$(/usr/bin/stat -f %z \"$copy\")\" = \(q(String(size))) ] || \(refuse("the package copy is not the size that was verified"))",
+            "sum=$(/usr/bin/shasum -a 256 \"$copy\") || \(refuse("the package copy could not be checksummed"))",
+            "[ \"${sum%% *}\" = \(q(sha256)) ] || \(refuse("the package copy does not match the bytes that were verified"))",
+            "sig=$(/usr/sbin/pkgutil --check-signature \"$copy\") || \(refuse("the package copy has no valid signature"))",
+            "case \"$sig\" in *\(q(PackageVerifier.developerIDStatus))*) ;; *) \(refuse("the package copy is not Developer ID signed")) ;; esac",
             "leaf=$(printf '%s\\n' \"$sig\" | /usr/bin/sed -n 's/^[[:space:]]*1\\.[[:space:]]*//p' | /usr/bin/head -n 1)",
-            "case \"$leaf\" in \(leafPrefix)*\(team)*) ;; *) echo 'The package copy is not signed by the same developer as Throttle.' >&2; exit 65 ;; esac",
-            "gk=$(/usr/sbin/spctl --assess --type install -vv \"$copy\" 2>&1) || { echo 'Gatekeeper rejected the package copy.' >&2; exit 65; }",
-            "case \"$gk\" in *\(notarized)*) ;; *) echo 'The package copy is not notarized.' >&2; exit 65 ;; esac",
+            "case \"$leaf\" in \(q(PackageVerifier.installerCertificatePrefix))*\(q(" (\(teamID))"))) ;; *) \(refuse("the package copy is not signed by the same developer as Throttle")) ;; esac",
+            "gk=$(/usr/sbin/spctl --assess --type install -vv \"$copy\" 2>&1) || \(refuse("Gatekeeper rejected the package copy"))",
+            "case \"$gk\" in *\(q(PackageVerifier.notarizedSource))*) ;; *) \(refuse("the package copy is not notarized")) ;; esac",
+            "entries=$(/usr/bin/xar -tf \"$copy\") || \(refuse("the package copy could not be read"))",
+            "if printf '%s\\n' \"$entries\" | /usr/bin/grep -q 'Scripts$'; then \(refuse("the package copy contains install scripts")); fi",
+            "/usr/bin/xar -xf \"$copy\" -C \"$dir\" Distribution || \(refuse("the package copy could not be read"))",
+            "isthrottle=$(/usr/bin/xmllint --nonet --xpath \(q(productQuery)) \"$dir/Distribution\") || \(refuse("the package copy's Distribution could not be read"))",
+            "[ \"$isthrottle\" = 'true' ] || \(refuse("the package copy is not Throttle"))",
+            "isversion=$(/usr/bin/xmllint --nonet --xpath \(q(versionQuery)) \"$dir/Distribution\") || \(refuse("the package copy's Distribution could not be read"))",
+            "[ \"$isversion\" = 'true' ] || \(refuse("the package copy is not Throttle \(version.text)"))",
             "/usr/sbin/installer -pkg \"$copy\" -target / 1>&2",
         ].joined(separator: "\n")
     }
@@ -160,10 +210,5 @@ struct UpdateInstaller: UpdateInstalling {
             throw UpdateError.relaunch(error.localizedDescription)
         }
         NSApplication.shared.terminate(nil)
-    }
-
-    @MainActor
-    func openInInstaller(_ url: URL) {
-        NSWorkspace.shared.open(url)
     }
 }

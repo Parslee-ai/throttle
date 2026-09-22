@@ -23,9 +23,9 @@ final class UpdateController {
         case relaunching
         /// The user dismissed the administrator prompt.
         case cancelled
-        /// A redacted, user-facing message. `canOpenInInstaller` is true when a
-        /// verified package is on disk and the user can finish by hand.
-        case failed(String, canOpenInInstaller: Bool)
+        /// A redacted, user-facing message. Retrying starts over: a fresh
+        /// download, verified from scratch.
+        case failed(String)
     }
 
     /// The environment variable that overrides the running version, so an
@@ -46,8 +46,6 @@ final class UpdateController {
     @ObservationIgnored private let cacheDirectory: URL
     /// The release the Install button installs; set by a successful check.
     @ObservationIgnored private var pendingRelease: AvailableRelease?
-    /// The package that passed verification, for "Open in Installer".
-    @ObservationIgnored private var verifiedPackage: URL?
 
     /// Production wiring.
     convenience init() {
@@ -121,7 +119,6 @@ final class UpdateController {
             return Task {}
         }
         pendingRelease = nil
-        verifiedPackage = nil
         state = .checking
         let feed = ReleaseFeed(client: client, currentVersion: currentVersion)
         return Task {
@@ -140,11 +137,12 @@ final class UpdateController {
     }
 
     /// Downloads, verifies, and installs the release the last check found,
-    /// then relaunches. The returned task is for tests.
+    /// then relaunches. Every attempt downloads afresh, and the downloaded file
+    /// is deleted whatever happens, so nothing unverified or refused is left
+    /// on disk to be opened later. The returned task is for tests.
     @discardableResult
     func installUpdate() -> Task<Void, Never> {
         guard !isBusy, let release = pendingRelease else { return Task {} }
-        verifiedPackage = nil
 
         // Refuse before downloading anything: an ad-hoc build has no team to
         // hold the package's signature against.
@@ -158,15 +156,23 @@ final class UpdateController {
 
         state = .downloading
         return Task {
+            var downloaded: URL?
+            defer { if let downloaded { try? FileManager.default.removeItem(at: downloaded) } }
             do {
-                let package = try await downloader.download(release.asset, into: cacheDirectory)
+                let file = try await downloader.download(release.asset, into: cacheDirectory)
+                downloaded = file
                 state = .verifying
-                try await verifier.verify(packageAt: package, teamID: teamID)
-                verifiedPackage = package
+                let expectation = PackageExpectation(
+                    teamID: teamID,
+                    version: release.version,
+                    size: release.asset.size,
+                    sha256: release.asset.sha256
+                )
+                let package = try await verifier.verify(packageAt: file, expecting: expectation)
                 state = .installing
-                try await installer.install(packageAt: package, version: release.version, teamID: teamID)
-                try? FileManager.default.removeItem(at: package)
-                verifiedPackage = nil
+                try await installer.install(package)
+                try? FileManager.default.removeItem(at: file)
+                downloaded = nil
                 // Installed: a retry after a failed relaunch re-checks rather
                 // than asking for the administrator password again.
                 pendingRelease = nil
@@ -187,12 +193,6 @@ final class UpdateController {
         pendingRelease == nil ? checkForUpdates() : installUpdate()
     }
 
-    /// Opens the verified package in Installer after an install failure.
-    func openInInstaller() {
-        guard let verifiedPackage else { return }
-        installer.openInInstaller(verifiedPackage)
-    }
-
     private func fail(_ error: any Error) {
         let message: String
         if let update = error as? UpdateError {
@@ -200,13 +200,6 @@ final class UpdateController {
         } else {
             message = error.localizedDescription
         }
-        let fallback: Bool
-        if case .install = error as? UpdateError, let verifiedPackage,
-           FileManager.default.fileExists(atPath: verifiedPackage.path) {
-            fallback = true
-        } else {
-            fallback = false
-        }
-        state = .failed(Redactor.redact(message), canOpenInInstaller: fallback)
+        state = .failed(Redactor.redact(message))
     }
 }

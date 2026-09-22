@@ -51,7 +51,7 @@ struct UpdateButton: View {
                 .foregroundStyle(.secondary)
             installButton(nil)
 
-        case .failed(let message, let canOpenInInstaller):
+        case .failed(let message):
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
                 .help(message)
@@ -61,9 +61,6 @@ struct UpdateButton: View {
                 .foregroundStyle(.secondary)
                 .truncationMode(.tail)
                 .help(message)
-            if canOpenInInstaller {
-                Button("Open in Installer") { controller.openInInstaller() }
-            }
             Button("Try Again") { controller.retry() }
         }
     }
