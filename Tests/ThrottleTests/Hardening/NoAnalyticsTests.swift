@@ -1,11 +1,15 @@
 import XCTest
 
-/// ISC-136: no analytics, crash reporter, or update check.
+/// ISC-136: no analytics and no crash reporter. Throttle's only update check
+/// is its own, user-initiated one against the project's GitHub Releases: it
+/// runs when the user clicks Check for Updates, never on launch or a timer,
+/// and it is built in, not an embedded update SDK.
 ///
-/// Throttle's whole value rests on the claim that it talks to two vendors and
-/// nobody else. A crash reporter contradicts that claim silently, and would
-/// also be the one component with a legitimate-looking reason to serialize
-/// process memory, which is where the tokens are.
+/// Throttle's whole value rests on the claim that it talks to two vendors, and
+/// to its own release page only when asked, and nobody else. A crash reporter
+/// contradicts that claim silently, and would also be the one component with a
+/// legitimate-looking reason to serialize process memory, which is where the
+/// tokens are.
 final class NoAnalyticsTests: XCTestCase {
     /// Matched case-sensitively, as the identifiers are actually spelled. The
     /// case matters: SF Symbol names are lowercase, and Throttle's Anthropic
