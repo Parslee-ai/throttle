@@ -235,6 +235,53 @@ the Distribution's `<os-version min>`.
 `Info.plist` and writes that one value into the Distribution. A malformed value
 is fatal rather than replaced with a guess.
 
+## What the in-app updater expects
+
+Throttle's **Check for Updates** button reads
+`GET /repos/Parslee-ai/throttle/releases/latest` and installs only what this
+script publishes, exactly as it publishes it. A release the updater should offer
+needs all of the following, and `scripts/release.sh` produces every one:
+
+- A published release (not a draft, not a pre-release). GitHub's `latest`
+  endpoint never returns pre-releases, so `-rc.N` builds are never offered.
+- Tag `v<version>`, where `<version>` matches
+  `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`.
+- An asset named exactly `Throttle-<version>.pkg`, served from
+  `https://github.com/Parslee-ai/throttle/releases/download/v<version>/Throttle-<version>.pkg`,
+  whose downloaded size matches the size GitHub lists.
+- A package signed with a **Developer ID Installer** certificate from the **same
+  team** as the running app's Developer ID Application signature, notarized and
+  stapled, so `pkgutil --check-signature` and `spctl --assess --type install`
+  both pass.
+
+Anything else is reported to the user as "no installable update" or as a failed
+verification, and nothing is installed. Renaming the asset, moving the
+repository, or changing the signing team breaks updates for every copy already
+installed, so treat those as breaking changes.
+
+Ad-hoc and unsigned builds (an `--unsigned` release, or a local
+`scripts/build.sh` product that was never signed) have no team to compare
+against and refuse to install updates.
+
+### Testing an update end to end
+
+The environment variable `THROTTLE_UPDATE_CURRENT_VERSION` makes Throttle
+believe it is running that version, so a real published release looks newer. It
+is ignored unless it holds a valid version (no leading `v`). To exercise the
+whole path against the live release:
+
+```bash
+# Quit the running Throttle first, then, with the signed release installed:
+THROTTLE_UPDATE_CURRENT_VERSION=0.0.1 /Applications/Throttle.app/Contents/MacOS/Throttle
+```
+
+Click **Check for Updates**, then **Install**, and approve the administrator
+prompt. Throttle downloads the latest release, verifies it, reinstalls it over
+`/Applications/Throttle.app`, and relaunches. The relaunched copy starts
+through `open`, without the variable, so it reports its real version and shows
+it is up to date. Cancelling the prompt should show "Install cancelled" and
+change nothing.
+
 ## Unsigned builds
 
 `scripts/release.sh 1.0.0 --unsigned` produces an ad-hoc signed app and an

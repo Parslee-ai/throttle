@@ -48,6 +48,25 @@ xattr -dr com.apple.quarantine /Applications/Throttle.app
 
 Release notes say which kind of build a given release is.
 
+## Updates
+
+Click **Check for Updates** in the menu bar window. Throttle contacts GitHub
+only when you click it, never on its own. If a newer release is out, click
+**Install** and Throttle:
+
+1. downloads that release's signed installer package from this repository's
+   GitHub Releases,
+2. verifies the package is signed by the same developer as the copy of Throttle
+   you are running, and notarized by Apple,
+3. asks for your administrator password with the standard macOS prompt,
+4. installs the update and relaunches.
+
+If you cancel the password prompt, nothing changes and you can install again
+later. If the install fails, Throttle offers to open the verified package in
+Installer so you can finish by hand. Builds that are not signed with a Developer
+ID (built from source, or unsigned releases) cannot verify an update, so they
+say so; download new versions from the Releases page instead.
+
 ## Adding accounts
 
 Click the menu bar item, then **Add account**, and choose **Claude** or
@@ -83,8 +102,10 @@ Throttle polls every five minutes per account by default, never faster than
 once a minute, and backs off when a provider asks it to. The ten-second menu bar
 rotation reads cached data and never triggers a network request.
 
-Nothing leaves your Mac except those two requests and the OAuth token exchanges.
-There is no analytics, no crash reporting, and no update check.
+Nothing leaves your Mac except those two requests, the OAuth token exchanges,
+and, only when you click **Check for Updates**, the update check against this
+repository's GitHub Releases. There is no analytics, no crash reporting, and no
+automatic update check.
 
 ## Building from source
 
