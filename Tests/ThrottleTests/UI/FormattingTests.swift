@@ -159,13 +159,18 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(Formatting.planText("  max 5x "), "Max 5x")
     }
 
-    /// Only plan-shaped tokens are tidied. An older label that is really an
-    /// organization name, or anything with an `@` or punctuation, shows as it is.
-    func testPlanTextLeavesNonPlanLabelsAlone() {
-        XCTAssertEqual(Formatting.planText("someone@example.com's Organization"), "someone@example.com's Organization")
-        XCTAssertEqual(Formatting.planText("someone.name@example.com"), "someone.name@example.com")
-        XCTAssertEqual(Formatting.planText("Team (EU)"), "Team (EU)")
-        XCTAssertEqual(Formatting.planText("max  20x"), "max  20x", "a double space is not plan-shaped")
+    /// A label that is not plan-shaped, such as an organization name an older
+    /// version stored, is no plan at all: no subtitle.
+    func testPlanTextHidesNonPlanLabels() {
+        XCTAssertNil(Formatting.planText("someone@example.com's Organization"))
+        XCTAssertNil(Formatting.planText("someone.name@example.com"))
+        XCTAssertNil(Formatting.planText("Team (EU)"))
+        XCTAssertNil(Formatting.planText("max  20x"), "a double space is not plan-shaped")
+        XCTAssertTrue(Formatting.isPlanShaped("max 20x"))
+        XCTAssertTrue(Formatting.isPlanShaped(" pro "))
+        XCTAssertTrue(Formatting.isPlanShaped("claude_max-5x"))
+        XCTAssertFalse(Formatting.isPlanShaped("someone@example.com's Organization"))
+        XCTAssertFalse(Formatting.isPlanShaped(""))
     }
 
     // MARK: Bar label

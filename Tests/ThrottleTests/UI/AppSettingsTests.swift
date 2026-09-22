@@ -63,6 +63,27 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertNil(AppSettings(defaults: defaults).planLabel(for: id))
     }
 
+    /// Organization names stored as plans by 0.2.0-rc.1 are cleared at
+    /// launch; real plans and other accounts are left alone, and the change
+    /// persists.
+    func testNonPlanLabelsAreCleared() {
+        let defaults = makeDefaults()
+        let settings = AppSettings(defaults: defaults)
+        let named = UUID(), planned = UUID(), empty = UUID()
+        settings.setPlanLabel("someone@example.com's Organization", for: named)
+        settings.setPlanLabel("max 20x", for: planned)
+        settings.setPlanLabel(nil, for: empty)
+
+        settings.removePlanLabels { !Formatting.isPlanShaped($0) }
+        XCTAssertNil(settings.planLabel(for: named))
+        XCTAssertEqual(settings.planLabel(for: planned), "max 20x")
+        XCTAssertNotNil(settings.accountMeta[named], "the rest of the account's metadata stays")
+
+        let reloaded = AppSettings(defaults: defaults)
+        XCTAssertNil(reloaded.planLabel(for: named))
+        XCTAssertEqual(reloaded.planLabel(for: planned), "max 20x")
+    }
+
     func testPollSettingsCarriesTheInterval() {
         let settings = AppSettings(defaults: makeDefaults())
         settings.pollInterval = 120

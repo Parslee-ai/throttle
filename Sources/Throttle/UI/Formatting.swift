@@ -257,18 +257,21 @@ enum Formatting {
 
     // MARK: Account text
 
-    /// The plan under the account name: `max` → `Max`, `max 20x` → `Max 20x`,
-    /// `pro_20x` → `Pro 20x`. Only a plan-shaped token (letters, digits, `_`,
-    /// `-`, single spaces) is tidied; anything else, such as a label with an
-    /// `@` in it, is shown as it is. `nil` when there is nothing to show.
-    static func planText(_ raw: String?) -> String? {
-        guard let raw else { return nil }
+    /// True for a label shaped like a plan: letters, digits, `_`, `-`, and
+    /// single spaces, ignoring surrounding whitespace. An organization name
+    /// stored by an older version ("someone@example.com's Organization") is
+    /// not, and is treated as no plan at all.
+    static func isPlanShaped(_ raw: String) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard trimmed.range(of: #"^[\p{L}\p{N}_-]+( [\p{L}\p{N}_-]+)*$"#, options: .regularExpression) != nil else {
-            return trimmed
-        }
-        let words = trimmed
+        return trimmed.range(of: #"^[\p{L}\p{N}_-]+( [\p{L}\p{N}_-]+)*$"#, options: .regularExpression) != nil
+    }
+
+    /// The plan under the account name: `max` → `Max`, `max 20x` → `Max 20x`,
+    /// `pro_20x` → `Pro 20x`. `nil` when there is no plan to show, including
+    /// for a label that is not plan-shaped (`isPlanShaped`).
+    static func planText(_ raw: String?) -> String? {
+        guard let raw, isPlanShaped(raw) else { return nil }
+        let words = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .split(separator: " ", omittingEmptySubsequences: true)

@@ -141,6 +141,9 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+        // Version 0.2.0-rc.1 stored the Claude organization's name, which can
+        // hold the email, as the plan. It is no plan; drop it once here.
+        settings.removePlanLabels { !Formatting.isPlanShaped($0) }
         refreshLaunchAtLoginStatus()
         rotation.start()
         let scheduler = scheduler
@@ -202,7 +205,7 @@ final class AppModel {
     /// plan change shows up without a re-login.
     private func adoptPlanLabels(from snapshot: [UUID: CachedStatus]) {
         for account in accounts {
-            guard let plan = snapshot[account.id]?.status.planLabel, !plan.isEmpty,
+            guard let plan = snapshot[account.id]?.status.planLabel, Formatting.isPlanShaped(plan),
                   plan != settings.planLabel(for: account.id) else { continue }
             settings.setPlanLabel(plan, for: account.id)
         }
