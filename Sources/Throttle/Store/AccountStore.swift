@@ -101,8 +101,8 @@ actor AccountStore {
 
     /// Adds an account, or, when one with the same provider and email
     /// (case-insensitive) already exists, replaces that account's credential
-    /// and adopts the new email casing while keeping its id and position
-    /// (ISC-93).
+    /// and adopts the new email casing while keeping its id, position, and
+    /// nickname (ISC-93).
     func add(provider: Provider, email: String, credential: AccountCredential) throws -> Account {
         try ensureLoaded()
         if let index = storage.firstIndex(where: {
@@ -177,7 +177,8 @@ actor AccountStore {
         try renumberAndPersist()
     }
 
-    /// Updates the display email, for when a provider profile changes.
+    /// Updates the email, for when a provider profile changes. A nickname the
+    /// user set is kept.
     func updateEmail(id: UUID, email: String) throws {
         try ensureLoaded()
         guard let index = storage.firstIndex(where: { $0.id == id }) else {
@@ -185,6 +186,32 @@ actor AccountStore {
         }
         storage[index].email = email
         try persist()
+    }
+
+    /// Longest nickname the store keeps; anything longer is cut to this.
+    static let maximumNicknameLength = 64
+
+    /// Sets the user's name for an account and persists it. Surrounding
+    /// whitespace is trimmed, an empty name clears the nickname so the email
+    /// shows again, and a long one is cut to `maximumNicknameLength`.
+    @discardableResult
+    func setNickname(id: UUID, to name: String?) throws -> Account {
+        try ensureLoaded()
+        guard let index = storage.firstIndex(where: { $0.id == id }) else {
+            throw AccountStoreError.unknownAccount(id)
+        }
+        storage[index].nickname = Self.normalizedNickname(name)
+        try persist()
+        return storage[index]
+    }
+
+    /// The nickname as stored: trimmed, capped, and `nil` when empty.
+    static func normalizedNickname(_ name: String?) -> String? {
+        let trimmed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let capped = String(trimmed.prefix(maximumNicknameLength))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return capped.isEmpty ? nil : capped
     }
 
     /// Replaces the stored credential after a refresh rotated it. Nothing in

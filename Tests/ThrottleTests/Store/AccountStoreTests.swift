@@ -175,6 +175,80 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.first?.email, "renamed@example.com")
     }
 
+    // MARK: Nickname
+
+    func testSetNicknameTrimsCapsClearsAndPersists() async throws {
+        let store = makeStore()
+        let a = try await store.add(provider: .anthropic, email: "a@example.com", credential: credential("a"))
+
+        var renamed = try await store.setNickname(id: a.id, to: "  Work account \n")
+        XCTAssertEqual(renamed.nickname, "Work account")
+        XCTAssertEqual(renamed.displayName, "Work account")
+        XCTAssertEqual(renamed.email, "a@example.com", "renaming never touches the email")
+        var reloaded = try await makeStore().load()
+        XCTAssertEqual(reloaded.first?.nickname, "Work account")
+
+        renamed = try await store.setNickname(id: a.id, to: String(repeating: "n", count: 100))
+        XCTAssertEqual(renamed.nickname?.count, AccountStore.maximumNicknameLength)
+        XCTAssertEqual(AccountStore.maximumNicknameLength, 64)
+
+        renamed = try await store.setNickname(id: a.id, to: " \n\t ")
+        XCTAssertNil(renamed.nickname, "an empty name clears the nickname")
+        XCTAssertEqual(renamed.displayName, "a@example.com")
+        reloaded = try await makeStore().load()
+        XCTAssertNil(reloaded.first?.nickname)
+
+        do {
+            try await store.setNickname(id: UUID(), to: "x")
+            XCTFail("expected a throw")
+        } catch AccountStoreError.unknownAccount {
+        }
+    }
+
+    /// The provider's email refresh and a re-login both rewrite the email;
+    /// neither may drop the name the user chose.
+    func testEmailUpdatesKeepTheNickname() async throws {
+        let store = makeStore()
+        let a = try await store.add(provider: .anthropic, email: "old@example.com", credential: credential("a"))
+        try await store.setNickname(id: a.id, to: "Personal")
+
+        // `AppModel.adoptProviderEmails` and a re-login with a new email.
+        try await store.updateEmail(id: a.id, email: "new@example.com")
+        var accounts = await store.accounts()
+        XCTAssertEqual(accounts.first?.email, "new@example.com")
+        XCTAssertEqual(accounts.first?.nickname, "Personal")
+
+        // A re-login that reports the same email goes through `add`.
+        let again = try await store.add(provider: .anthropic, email: "NEW@example.com", credential: credential("b"))
+        XCTAssertEqual(again.id, a.id)
+        XCTAssertEqual(again.nickname, "Personal")
+        accounts = try await makeStore().load()
+        XCTAssertEqual(accounts.map(\.nickname), ["Personal"])
+        XCTAssertEqual(accounts.map(\.email), ["NEW@example.com"])
+    }
+
+    /// An `accounts.json` from before nicknames existed loads unchanged.
+    func testLegacyAccountsFileWithoutNicknamesLoads() async throws {
+        let id = UUID()
+        let json = """
+        [
+          {
+            "addedAt" : "2026-01-01T00:00:00Z",
+            "email" : "legacy@example.com",
+            "id" : "\(id.uuidString)",
+            "provider" : "openai",
+            "sortIndex" : 0
+          }
+        ]
+        """
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: paths.accountsFile)
+        let accounts = try await makeStore().load()
+        XCTAssertEqual(accounts.map(\.id), [id])
+        XCTAssertNil(accounts.first?.nickname)
+        XCTAssertEqual(accounts.first?.displayName, "legacy@example.com")
+    }
+
     func testUpdateCredentialReplacesOnlyTheKeychainHalf() async throws {
         let store = makeStore()
         let a = try await store.add(provider: .anthropic, email: "a@example.com", credential: credential("a"))
