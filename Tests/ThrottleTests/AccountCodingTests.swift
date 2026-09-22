@@ -39,6 +39,40 @@ final class AccountCodingTests: XCTestCase {
         XCTAssertEqual(Set(object.keys), ["id", "provider", "email", "sortIndex", "addedAt"])
     }
 
+    func testNicknameIsEncodedOnlyWhenSet() throws {
+        let named = Account(provider: .anthropic, email: "someone@example.com", nickname: "Work", sortIndex: 0)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(named)) as? [String: Any]
+        )
+        XCTAssertEqual(Set(object.keys), ["id", "provider", "email", "nickname", "sortIndex", "addedAt"])
+        XCTAssertEqual(object["nickname"] as? String, "Work")
+    }
+
+    /// An `accounts.json` written before renaming existed has no `nickname`
+    /// key. It must still load, with the email as the display name.
+    func testLegacyRecordWithoutNicknameDecodes() throws {
+        let id = UUID()
+        let json = """
+        {"addedAt": 1780000000, "email": "someone@example.com", "id": "\(id.uuidString)", "provider": "anthropic", "sortIndex": 2}
+        """
+        let account = try JSONDecoder().decode(Account.self, from: Data(json.utf8))
+        XCTAssertEqual(account.id, id)
+        XCTAssertNil(account.nickname)
+        XCTAssertEqual(account.displayName, "someone@example.com")
+        XCTAssertEqual(account.sortIndex, 2)
+    }
+
+    func testDisplayNamePrefersANonEmptyNickname() {
+        var account = Account(provider: .openai, email: "someone@example.com", sortIndex: 0)
+        XCTAssertEqual(account.displayName, "someone@example.com")
+        account.nickname = "Side project"
+        XCTAssertEqual(account.displayName, "Side project")
+        account.nickname = "   "
+        XCTAssertEqual(account.displayName, "someone@example.com")
+        account.nickname = ""
+        XCTAssertEqual(account.displayName, "someone@example.com")
+    }
+
     func testAccountRoundTrips() throws {
         let account = Account(
             id: UUID(),
