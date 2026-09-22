@@ -93,6 +93,19 @@ final class AppSettings {
         accountMeta[id] = nil
     }
 
+    /// Clears every stored plan label that `isStale` rejects, keeping the rest
+    /// of each account's metadata. Writes only when something changed.
+    func removePlanLabels(where isStale: (String) -> Bool) {
+        var cleaned = accountMeta
+        for (id, meta) in cleaned {
+            guard let plan = meta.planLabel, isStale(plan) else { continue }
+            cleaned[id]?.planLabel = nil
+        }
+        if cleaned != accountMeta {
+            accountMeta = cleaned
+        }
+    }
+
     // MARK: Helpers
 
     static func clamp(_ value: TimeInterval, to range: ClosedRange<TimeInterval>, default fallback: TimeInterval) -> TimeInterval {
