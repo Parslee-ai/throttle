@@ -248,16 +248,37 @@ needs all of the following, and `scripts/release.sh` produces every one:
   `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`.
 - An asset named exactly `Throttle-<version>.pkg`, served from
   `https://github.com/Parslee-ai/throttle/releases/download/v<version>/Throttle-<version>.pkg`,
-  whose downloaded size matches the size GitHub lists.
+  whose downloaded size matches the size GitHub lists, and whose SHA-256
+  matches the asset's `digest` (`sha256:<64 lowercase hex>`) when GitHub lists
+  one. GitHub computes the digest itself on upload.
 - A package signed with a **Developer ID Installer** certificate from the **same
   team** as the running app's Developer ID Application signature, notarized and
   stapled, so `pkgutil --check-signature` and `spctl --assess --type install`
   both pass.
+- A `Distribution` whose every `pkg-ref` has `id="ai.parslee.throttle"` and
+  whose one versioned `pkg-ref` has `version="<version>"`, exactly as
+  `scripts/package.sh` writes it. This is what stops the same team's other
+  products, and older Throttle packages, from being installed as an update.
+- No `Scripts` entry anywhere in the archive (`xar -tf`). Throttle's packages
+  have no install scripts; adding one breaks updates.
+
+The app checks all of this before it asks for a password. The root step then
+checks it again on its own copy: it refuses a source that is not a regular
+file, copies at most the verified size into a fresh root-owned directory,
+requires that copy's exact size and SHA-256 to match what the app verified, and
+repeats the signature, team, notarization, `Distribution` and no-`Scripts`
+checks before `installer` reads it. It runs under `env -i` with only `PATH`
+set. A refusal there exits 65, and the app reports it as a failed verification
+and deletes the download.
+
+Keep `pkgutil` in both places. `spctl --assess` alone reported a package whose
+payload was modified after signing as `accepted` and `Notarized Developer ID`;
+only `pkgutil --check-signature` rejected it (`package is invalid`).
 
 Anything else is reported to the user as "no installable update" or as a failed
-verification, and nothing is installed. Renaming the asset, moving the
-repository, or changing the signing team breaks updates for every copy already
-installed, so treat those as breaking changes.
+verification, and nothing is installed. Renaming the asset, changing the
+package identifier, moving the repository, or changing the signing team breaks
+updates for every copy already installed, so treat those as breaking changes.
 
 Ad-hoc and unsigned builds (an `--unsigned` release, or a local
 `scripts/build.sh` product that was never signed) have no team to compare
