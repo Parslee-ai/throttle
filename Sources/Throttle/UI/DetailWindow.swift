@@ -134,6 +134,7 @@ struct DetailWindow: View {
     /// The footer's trailing controls, in one row.
     private var footerControls: some View {
         HStack(spacing: 10) {
+            UpdateButton(controller: model.updates)
             Button("Refresh all") { model.refreshAll() }
                 .controlSize(.small)
             Button {
