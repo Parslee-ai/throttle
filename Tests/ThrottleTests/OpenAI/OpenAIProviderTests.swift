@@ -66,6 +66,7 @@ final class OpenAIProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.planType, "pro")
         XCTAssertEqual(snapshot.additionalWindows.count, 2)
         XCTAssertEqual(status.planLabel, "pro", "ISC-74: the plan badge rides on the status")
+        XCTAssertEqual(status.resetCreditsAvailable, 1, "the manual-reset count rides on the status")
         XCTAssertEqual(status.windows.filter(\.isLane).count, 2, "extra lanes carry the lane prefix so the bar can skip them")
     }
 
@@ -76,6 +77,7 @@ final class OpenAIProviderTests: XCTestCase {
         let provider = makeProvider(OpenAIMockHTTPClient(responses: [.json(json)]))
         let status = try await provider.fetchStatus(account: OpenAIFixtures.account, credential: credential)
         XCTAssertNil(status.planLabel)
+        XCTAssertNil(status.resetCreditsAvailable)
     }
 
     func testMissingPayloadEmailFallsBackToAccountEmail() async throws {

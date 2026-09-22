@@ -55,6 +55,57 @@ final class StatusCachePersistenceTests: XCTestCase {
         }
     }
 
+    func testResetCreditCountRoundTrips() throws {
+        var original = entry(percent: 5, at: clock.now())
+        original.status = AccountStatus(
+            accountID: original.status.accountID,
+            provider: original.status.provider,
+            email: original.status.email,
+            windows: original.status.windows,
+            fetchedAt: original.status.fetchedAt,
+            state: .ok,
+            planLabel: "pro",
+            resetCreditsAvailable: 1
+        )
+        let decoded = try StatusCachePersistence.decode(try StatusCachePersistence.encode([account.id: original]))
+        XCTAssertEqual(decoded[account.id]?.status.resetCreditsAvailable, 1)
+        XCTAssertEqual(decoded, [account.id: original])
+    }
+
+    /// A cache written before the reset-credit field existed still loads,
+    /// with no count rather than a failure.
+    func testCacheFromBeforeResetCreditsDecodes() throws {
+        let id = account.id.uuidString
+        let window = #"{ "durationSeconds" : 604800, "key" : "7d", "label" : "Weekly", "resetsAt" : "2027-01-20T08:00:00Z", "usedPercent" : 33 }"#
+        let json = """
+        {
+          "entries" : {
+            "\(id)" : {
+              "isStale" : false,
+              "lastAttempt" : "2027-01-15T08:00:00Z",
+              "lastGoodWindows" : [ \(window) ],
+              "status" : {
+                "accountID" : "\(id)",
+                "email" : "persist@example.com",
+                "fetchedAt" : "2027-01-15T08:00:00Z",
+                "planLabel" : "pro",
+                "provider" : "openai",
+                "state" : { "ok" : { } },
+                "windows" : [ \(window) ]
+              }
+            }
+          },
+          "version" : 1
+        }
+        """
+        let decoded = try StatusCachePersistence.decode(Data(json.utf8))
+        let entry = try XCTUnwrap(decoded[account.id])
+        XCTAssertNil(entry.status.resetCreditsAvailable)
+        XCTAssertEqual(entry.status.planLabel, "pro")
+        XCTAssertEqual(entry.status.windows.first?.usedPercent, 33)
+        XCTAssertEqual(entry.status.state, .ok)
+    }
+
     func testEntriesWithoutASuccessfulFetchAreNotPersisted() throws {
         var never = entry(percent: 0, at: clock.now(), state: .needsLogin)
         never.lastGoodWindows = nil

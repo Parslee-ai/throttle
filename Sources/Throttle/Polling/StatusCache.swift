@@ -124,7 +124,8 @@ actor StatusCache {
             windows: windows,
             fetchedAt: previous?.status.fetchedAt ?? attempt,
             state: state,
-            planLabel: previous?.status.planLabel
+            planLabel: previous?.status.planLabel,
+            resetCreditsAvailable: previous?.status.resetCreditsAvailable
         )
         entries[account.id] = CachedStatus(
             status: status,
@@ -202,7 +203,8 @@ actor StatusCache {
             windows: status.windows,
             fetchedAt: status.fetchedAt,
             state: state,
-            planLabel: status.planLabel
+            planLabel: status.planLabel,
+            resetCreditsAvailable: status.resetCreditsAvailable
         )
     }
 }

@@ -83,7 +83,8 @@ struct OpenAIProvider: UsageProvider {
             windows: snapshot.windows + snapshot.additionalWindows,
             fetchedAt: fetchedAt,
             state: .ok,
-            planLabel: snapshot.planType.flatMap { $0.isEmpty ? nil : $0 }
+            planLabel: snapshot.planType.flatMap { $0.isEmpty ? nil : $0 },
+            resetCreditsAvailable: snapshot.resetCreditsAvailable
         )
         return (status, snapshot)
     }

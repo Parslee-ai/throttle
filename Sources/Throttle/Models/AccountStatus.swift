@@ -15,6 +15,11 @@ struct AccountStatus: Codable, Hashable, Sendable {
     /// `pro` or `max`, for the badge next to the email (ISC-74). `nil` when
     /// the payload carries no plan.
     let planLabel: String?
+    /// How many manual limit resets the account has banked, when the provider
+    /// reports such a count. `nil` when it does not, and the detail window
+    /// then shows no resets column at all. Optional so a status cache written
+    /// before this field existed still decodes.
+    let resetCreditsAvailable: Int?
 
     init(
         accountID: UUID,
@@ -23,7 +28,8 @@ struct AccountStatus: Codable, Hashable, Sendable {
         windows: [UsageWindow],
         fetchedAt: Date,
         state: AccountState,
-        planLabel: String? = nil
+        planLabel: String? = nil,
+        resetCreditsAvailable: Int? = nil
     ) {
         self.accountID = accountID
         self.provider = provider
@@ -32,5 +38,6 @@ struct AccountStatus: Codable, Hashable, Sendable {
         self.fetchedAt = fetchedAt
         self.state = state
         self.planLabel = planLabel
+        self.resetCreditsAvailable = resetCreditsAvailable
     }
 }
