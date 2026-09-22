@@ -163,17 +163,11 @@ final class PopupSnapshotTests: XCTestCase {
         }
         XCTAssertTrue(staleLabels.contains { $0.dimmed && $0.segments.contains { $0.band == .critical } })
         labels += staleLabels
-        let strip = VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
-                MenuBarLabel(label: label, onHover: { _ in })
-                    .font(.system(size: 13))
-            }
-        }
-        .padding(10)
-        .background(Colors.windowBackground)
+        // The menu bar draws the label as one image; render exactly that.
+        let images = labels.map(MenuBarImage.image(for:))
         for appearance in Self.appearances {
-            let image = try render(strip, appearance: appearance.value)
-            try check(image, named: "menubar-\(appearance.name)")
+            let strip = try MenuBarRendering.render(images, appearance: appearance.value)
+            try check(strip, named: "menubar-\(appearance.name)")
         }
     }
 
