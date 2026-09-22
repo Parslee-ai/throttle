@@ -90,6 +90,9 @@ final class AppModel {
 
     let settings: AppSettings
     let rotation: RotationController
+    /// The Check for Updates flow. It touches the network only when the user
+    /// clicks the footer button (ISC-179).
+    let updates = UpdateController()
 
     @ObservationIgnored private let store: AccountStore
     @ObservationIgnored private let cache: StatusCache
