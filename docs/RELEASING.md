@@ -264,12 +264,13 @@ needs all of the following, and `scripts/release.sh` produces every one:
 
 The app checks all of this before it asks for a password. The root step then
 checks it again on its own copy: it refuses a source that is not a regular
-file, copies at most the verified size into a fresh root-owned directory,
-requires that copy's exact size and SHA-256 to match what the app verified, and
-repeats the signature, team, notarization, `Distribution` and no-`Scripts`
-checks before `installer` reads it. It runs under `env -i` with only `PATH`
-set. A refusal there exits 65, and the app reports it as a failed verification
-and deletes the download.
+file, copies at most one byte more than the verified size into a fresh
+root-owned directory (so a file that grew is caught rather than silently cut to
+size), requires that copy's exact size and SHA-256 to match what the app
+verified, and repeats the signature, team, notarization, `Distribution` and
+no-`Scripts` checks before `installer` reads it. It runs under `env -i` with
+only `PATH` set. A refusal there exits 65, and the app reports it as a failed
+verification and deletes the download.
 
 Keep `pkgutil` in both places. `spctl --assess` alone reported a package whose
 payload was modified after signing as `accepted` and `Notarized Developer ID`;
