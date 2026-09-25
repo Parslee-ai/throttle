@@ -1,12 +1,15 @@
 import Foundation
 
-/// What the adapter reads from `api/oauth/profile`: the account's email and
-/// its subscription plan.
+/// What the adapter reads from `api/oauth/profile`: the account's email, its
+/// subscription plan, and its organization id.
 struct AnthropicProfile: Hashable, Sendable {
     var email: String?
     /// A plan such as `max 20x` or `pro`, or `nil` when the profile names no
     /// organization type. Never the organization's name.
     var planLabel: String?
+    /// `organization.uuid`, the path segment a limit reset is sent to. `nil`
+    /// when absent or not a plain id. Held in memory only, never persisted.
+    var organizationUUID: String? = nil
 }
 
 /// Turns the profile payload into an `AnthropicProfile`.
@@ -37,7 +40,10 @@ enum AnthropicProfileParser {
             planLabel: planLabel(
                 organizationType: organization?["organization_type"] as? String,
                 rateLimitTier: organization?["rate_limit_tier"] as? String
-            )
+            ),
+            organizationUUID: (organization?["uuid"] as? String).flatMap {
+                AnthropicEndpoints.isValidOrganizationID($0) ? $0 : nil
+            }
         )
     }
 

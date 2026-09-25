@@ -1,0 +1,15 @@
+{
+  "block_is_string": "eligible",
+  "block_is_array": [{ "eligible": true }],
+  "eligible_is_string": { "eligible": "true", "grants": [{ "id": "grant_test_a", "resets_left": 1, "usable_now": true }] },
+  "grants_is_string": { "eligible": true, "grants": "grant_test_a" },
+  "grants_not_objects": { "eligible": true, "grants": ["grant_test_a", 2, null, true] },
+  "resets_left_negative": { "eligible": true, "grants": [{ "id": "grant_test_a", "resets_left": -1, "usable_now": true }] },
+  "resets_left_fractional": { "eligible": true, "grants": [{ "id": "grant_test_a", "resets_left": 1.5, "usable_now": true }] },
+  "resets_left_string": { "eligible": true, "grants": [{ "id": "grant_test_a", "resets_left": "2", "usable_now": true }] },
+  "resets_left_bool": { "eligible": true, "grants": [{ "id": "grant_test_a", "resets_left": true, "usable_now": true }] },
+  "grant_id_uppercase": { "eligible": true, "grants": [{ "id": "Grant_Test_A", "resets_left": 1, "usable_now": true }] },
+  "grant_id_too_long": { "eligible": true, "grants": [{ "id": "grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "resets_left": 1, "usable_now": true }] },
+  "grant_id_path": { "eligible": true, "grants": [{ "id": "../grant", "resets_left": 1, "usable_now": true }], "next_grant_id": "../grant" },
+  "grant_id_missing": { "eligible": true, "grants": [{ "resets_left": 1, "usable_now": true }] }
+}

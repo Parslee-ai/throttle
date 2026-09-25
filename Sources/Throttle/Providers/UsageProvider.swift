@@ -10,8 +10,19 @@ protocol UsageProvider: Sendable {
     var provider: Provider { get }
 
     /// Reads current usage for one account. Read-only: an implementation must
-    /// never call an endpoint that spends quota or credits.
+    /// never call an endpoint that spends quota or credits. The one spending
+    /// call an adapter may make is `useReset`, and only when it is asked to.
     func fetchStatus(account: Account, credential: AccountCredential) async throws -> AccountStatus
+
+    /// Spends one banked limit reset for the account.
+    ///
+    /// Called only from an explicit, confirmed user action, never from a poll,
+    /// a timer, a wake, or a launch. `attemptID` is the idempotency key: every
+    /// retry of the same attempt passes the same value, so a reset that went
+    /// through is never spent twice. Returns the provider's answer; throws
+    /// `UsageError` for anything that is not an answer. The caller re-reads
+    /// usage after `.reset`; the adapter never invents window numbers.
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome
 
     /// Exchanges a refresh token for a rotated credential.
     ///
@@ -27,6 +38,11 @@ protocol UsageProvider: Sendable {
 
 extension UsageProvider {
     func accountDidSignIn(_ accountID: UUID) async {}
+
+    /// A provider with no reset to spend.
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+        throw ResetUnsupportedError()
+    }
 }
 
 /// How much of the current fetch's time budget is left.
@@ -62,4 +78,8 @@ enum UsageError: Error {
     case tooLarge
     /// Anything the URL loading system reported.
     case transport(Error)
+    /// A reset request answered with a non-2xx status that none of the cases
+    /// above covers. Only the reset path throws this; usage reads keep
+    /// `invalidResponse`.
+    case httpStatus(Int)
 }

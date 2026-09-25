@@ -2,8 +2,10 @@ import Foundation
 
 /// Reads Codex subscription usage for one ChatGPT account.
 ///
-/// The adapter touches exactly two URLs: the usage summary and the OAuth token
-/// endpoint. It never issues a request that spends quota or credits.
+/// The adapter touches three URLs: the usage summary, the OAuth token endpoint,
+/// and the reset consume endpoint. The usage read never spends quota or
+/// credits. The one spending call is `useReset`, which posts to
+/// `OpenAIEndpoints.resetConsumeURL` only on an explicit, confirmed user action.
 struct OpenAIProvider: UsageProvider {
     let provider: Provider = .openai
 
@@ -14,6 +16,8 @@ struct OpenAIProvider: UsageProvider {
 
     /// Usage payloads are a few kilobytes; anything past this is not a payload.
     static let maxUsageBodyBytes = 256 * 1024
+    /// A reset answer is a code and a count; anything past this is not one.
+    static let maxResetBodyBytes = 64 * 1024
 
     init(
         client: HTTPClient = URLSessionHTTPClient(),
@@ -87,6 +91,75 @@ struct OpenAIProvider: UsageProvider {
             resetCreditsAvailable: snapshot.resetCreditsAvailable
         )
         return (status, snapshot)
+    }
+
+    /// Spends one banked rate-limit reset.
+    ///
+    /// Sends exactly one request and never refreshes or retries on its own: a
+    /// 401 is thrown as `needsLogin`, and the caller owns refresh-and-resend
+    /// with the same `attemptID`. The attempt id goes out as
+    /// `redeem_request_id`, so a resend of an attempt that already went
+    /// through answers `already_redeemed` instead of spending a second reset.
+    /// No `credit_id` is sent, so the provider picks the credit.
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+        var request = URLRequest(url: OpenAIEndpoints.resetConsumeURL)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
+        if let accountID = credential.accountID, !accountID.isEmpty {
+            request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id")
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(OpenAIEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.httpBody = Self.resetRequestBody(attemptID: attemptID)
+
+        let response = try await client.send(request, maxBodyBytes: Self.maxResetBodyBytes)
+        if response.statusCode != 200 {
+            await diagnose(.reset, accountID: account.id, request: request, response: response, at: now())
+        }
+
+        switch response.statusCode {
+        case 200...299:
+            return Self.resetOutcome(for: OpenAIResetAnswer.parse(response.body))
+        case 401:
+            throw UsageError.needsLogin
+        case 403:
+            if let message = Self.permissionRefusal(in: response.body) {
+                throw UsageError.forbidden(reason: message)
+            }
+            throw UsageError.needsLogin
+        case 429:
+            throw UsageError.rateLimited(retryAfter: Self.retryAfter(from: response))
+        case 300...399:
+            throw UsageError.redirect
+        default:
+            throw UsageError.httpStatus(response.statusCode)
+        }
+    }
+
+    /// The exact JSON body sent to the consume endpoint.
+    static func resetRequestBody(attemptID: UUID) -> Data {
+        // Two string keys: serialization cannot fail.
+        (try? JSONSerialization.data(
+            withJSONObject: ["redeem_request_id": attemptID.uuidString.lowercased()],
+            options: [.sortedKeys]
+        )) ?? Data()
+    }
+
+    /// Maps the provider's answer code onto the provider-neutral outcome.
+    /// `already_redeemed` means this same attempt was spent earlier, which is
+    /// success. An unknown code or an unreadable body is never success.
+    static func resetOutcome(for answer: OpenAIResetAnswer?) -> ResetOutcome {
+        switch answer?.code {
+        case "reset", "already_redeemed":
+            return .reset
+        case "nothing_to_reset":
+            return .nothingToReset
+        case "no_credit":
+            return .noCredit
+        default:
+            return .unexpected
+        }
     }
 
     func refresh(credential: AccountCredential) async throws -> AccountCredential {

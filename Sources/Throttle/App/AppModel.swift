@@ -83,10 +83,18 @@ final class AppModel {
     /// A redacted, user-facing description of the last failure. Views show it
     /// once and the user can dismiss it.
     var lastError: String?
-    /// The login the sheet is showing, if any.
+    /// The login the detail window's login card is showing, if any. It lives
+    /// here, not in the view, so it outlives the panel closing while the
+    /// user is in the browser.
     var activeLogin: LoginFlow?
     /// Whether macOS will launch Throttle at login (ISC-127).
     private(set) var launchAtLoginStatus: SMAppService.Status = .notRegistered
+    /// Accounts whose banked reset is being spent right now. Their rows show
+    /// a spinner; every other row's button still works.
+    private(set) var resetsInFlight: Set<UUID> = []
+    /// The latest reset message per account. Memory only: it never outlives
+    /// the process.
+    private(set) var resetNotices: [UUID: ResetNotice] = [:]
 
     let settings: AppSettings
     let rotation: RotationController
@@ -100,37 +108,74 @@ final class AppModel {
     @ObservationIgnored private let scheduler: PollScheduler
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let diagnostics: Diagnostics
-    @ObservationIgnored private let httpClient = URLSessionHTTPClient()
+    @ObservationIgnored private let httpClient: URLSessionHTTPClient
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     /// The store's own order (`sortIndex`), where providers may interleave.
     /// Section moves are translated against it.
     @ObservationIgnored private var storeOrder: [Account] = []
     @ObservationIgnored private var started = false
+    @ObservationIgnored private var resetAttempts = ResetAttempts()
+    /// The running reset per account. Owned here, not by any view, so closing
+    /// the window or using the row's other actions never cancels one.
+    @ObservationIgnored private(set) var resetTasks: [UUID: Task<Void, Never>] = [:]
+    /// Waits out the success note's lifetime; the note fades when it returns.
+    @ObservationIgnored let successNoteExpiry: @Sendable () async -> Void
 
-    init(settings: AppSettings = AppSettings()) {
-        self.settings = settings
+    convenience init(settings: AppSettings = AppSettings()) {
         let paths = AppPaths.standard
         let store = AccountStore(credentials: KeychainStore(), paths: paths)
         let clock = SystemClock()
         let pollSettings = settings.pollSettings
         let cache = StatusCache(clock: clock, staleAfter: pollSettings.staleAfter)
         let diagnostics = Diagnostics(paths: paths)
+        let httpClient = URLSessionHTTPClient()
         let registry = ProviderRegistry(client: httpClient, diagnostics: diagnostics)
+        self.init(
+            settings: settings,
+            store: store,
+            cache: cache,
+            persistence: StatusCachePersistence(paths: paths, clock: clock),
+            scheduler: PollScheduler(
+                store: store,
+                providers: registry.usageProviders,
+                resolver: TokenRefresher(),
+                cache: cache,
+                settings: pollSettings,
+                clock: clock,
+                backoffPersistence: BackoffPersistence(paths: paths),
+                diagnostics: diagnostics
+            ),
+            registry: registry,
+            diagnostics: diagnostics,
+            httpClient: httpClient
+        )
+    }
+
+    /// The composition root with every part supplied. The app uses the
+    /// convenience initializer; tests pass their own store, cache, and
+    /// scheduler.
+    init(
+        settings: AppSettings,
+        store: AccountStore,
+        cache: StatusCache,
+        persistence: StatusCachePersistence,
+        scheduler: PollScheduler,
+        registry: ProviderRegistry,
+        diagnostics: Diagnostics,
+        httpClient: URLSessionHTTPClient = URLSessionHTTPClient(),
+        successNoteExpiry: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(for: ResetMessages.successLifetime)
+        }
+    ) {
+        self.settings = settings
         self.store = store
         self.cache = cache
+        self.persistence = persistence
+        self.scheduler = scheduler
         self.registry = registry
         self.diagnostics = diagnostics
-        self.persistence = StatusCachePersistence(paths: paths, clock: clock)
-        self.scheduler = PollScheduler(
-            store: store,
-            providers: registry.usageProviders,
-            resolver: TokenRefresher(),
-            cache: cache,
-            settings: pollSettings,
-            clock: clock,
-            backoffPersistence: BackoffPersistence(paths: paths),
-            diagnostics: diagnostics
-        )
+        self.httpClient = httpClient
+        self.successNoteExpiry = successNoteExpiry
         self.rotation = RotationController(interval: settings.rotationInterval)
     }
 
@@ -280,10 +325,71 @@ final class AppModel {
         }
     }
 
+    // MARK: Banked reset
+
+    /// Spends one banked reset for the account. Called only after the user
+    /// confirmed. The count is checked again here, because a poll may have
+    /// landed while the confirmation was open; at 0 nothing is sent.
+    func useReset(_ account: Account) {
+        guard !resetsInFlight.contains(account.id) else { return }
+        guard let count = statuses[account.id]?.status.resetCreditsAvailable, count > 0 else {
+            showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: account.id)
+            return
+        }
+        resetNotices[account.id] = nil
+        let attemptID = resetAttempts.attemptID(for: account.id)
+        resetsInFlight.insert(account.id)
+        let scheduler = scheduler
+        // Owned by the model, not the window: closing the window does not
+        // cancel the reset. The result is keyed by id, so a rename or move
+        // while it runs lands it on the same row.
+        let accountID = account.id
+        let providerName = account.provider.displayName
+        resetTasks[accountID] = Task {
+            let result = await scheduler.useReset(accountID: accountID, attemptID: attemptID)
+            resetsInFlight.remove(accountID)
+            resetTasks[accountID] = nil
+            resetAttempts.finish(accountID, with: result)
+            // A row removed during the reset gets no message back.
+            guard accounts.contains(where: { $0.id == accountID }) else { return }
+            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date()) {
+                showResetNotice(notice, for: accountID)
+            }
+        }
+    }
+
+    /// Closes the row's reset message.
+    func dismissResetNotice(for account: Account) {
+        resetNotices[account.id] = nil
+    }
+
+    private func showResetNotice(_ notice: ResetNotice, for accountID: UUID) {
+        resetNotices[accountID] = notice
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: notice.text,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
+        guard notice.kind == .success else { return }
+        let expiry = successNoteExpiry
+        Task { [weak self] in
+            await expiry()
+            guard let self, self.resetNotices[accountID]?.id == notice.id else { return }
+            self.resetNotices[accountID] = nil
+        }
+    }
+
     func remove(_ account: Account) {
+        resetNotices[account.id] = nil
+        resetAttempts.forget(account.id)
         Task {
             do {
                 try await store.remove(id: account.id)
+                // A read still running for the account can no longer write it.
+                await cache.forget(account.id)
                 settings.removeMeta(for: account.id)
                 await publishAccounts()
                 await cache.retain(accountIDs: Set(accounts.map(\.id)))
@@ -355,7 +461,7 @@ final class AppModel {
 
     // MARK: Login
 
-    /// Starts a new-account login and shows the sheet.
+    /// Starts a new-account login and shows the login card.
     func addAccount(provider: Provider, mode: LoginMode) {
         startLogin(provider: provider, mode: mode, replacing: nil)
     }

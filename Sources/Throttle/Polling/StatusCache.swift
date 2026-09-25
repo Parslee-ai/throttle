@@ -35,6 +35,10 @@ actor StatusCache {
     let staleAfter: TimeInterval
 
     private var entries: [UUID: CachedStatus] = [:]
+    /// Accounts dropped by `retain` or `forget`. Account ids are never
+    /// reused, so a write for one of these is a read that finished after its
+    /// row was removed, and is refused rather than bringing the row back.
+    private var removed: Set<UUID> = []
     private var subscribers: [UUID: AsyncStream<[UUID: CachedStatus]>.Continuation] = [:]
 
     init(clock: any PollClock, staleAfter: TimeInterval) {
@@ -92,6 +96,7 @@ actor StatusCache {
     /// A successful fetch. The entry becomes current and its last good windows
     /// are replaced.
     func recordSuccess(_ status: AccountStatus, at attempt: Date) {
+        guard !removed.contains(status.accountID) else { return }
         entries[status.accountID] = CachedStatus(
             status: status,
             lastGoodWindows: status.windows,
@@ -115,6 +120,7 @@ actor StatusCache {
         markStale: Bool,
         nextAttemptAt: Date? = nil
     ) {
+        guard !removed.contains(account.id) else { return }
         let previous = entries[account.id]
         let windows = previous?.lastGoodWindows ?? []
         let status = AccountStatus(
@@ -143,6 +149,7 @@ actor StatusCache {
     /// state says so, because that is why the numbers are not moving; an error
     /// backoff keeps the error the row already shows.
     func recordSkipped(account: Account, until: Date, rateLimited: Bool, at attempt: Date) {
+        guard !removed.contains(account.id) else { return }
         guard var entry = entries[account.id] else {
             recordFailure(
                 account: account,
@@ -163,11 +170,24 @@ actor StatusCache {
         publish()
     }
 
-    /// Drops entries for accounts that no longer exist in the store.
+    /// Drops entries for accounts that no longer exist in the store. The
+    /// dropped accounts stay refused for the life of the process.
     func retain(accountIDs: Set<UUID>) {
-        let before = entries.count
-        entries = entries.filter { accountIDs.contains($0.key) }
-        if entries.count != before { publish() }
+        let dropped = entries.keys.filter { !accountIDs.contains($0) }
+        guard !dropped.isEmpty else { return }
+        removed.formUnion(dropped)
+        for id in dropped {
+            entries[id] = nil
+        }
+        publish()
+    }
+
+    /// The account was removed: drops its entry and refuses every later
+    /// write for it, so a read that was already running when the row went
+    /// away cannot bring it back.
+    func forget(_ accountID: UUID) {
+        removed.insert(accountID)
+        if entries.removeValue(forKey: accountID) != nil { publish() }
     }
 
     // MARK: Helpers

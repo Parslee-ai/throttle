@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The sheet shown while a login runs (ISC-58, 80, 121, 123).
+/// The card shown while a login runs (ISC-58, 80, 121, 123), as a panel
+/// modal over the detail window.
 struct LoginSheet: View {
     @Bindable var flow: LoginFlow
     let onDismiss: () -> Void

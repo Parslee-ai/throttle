@@ -11,6 +11,7 @@ import os
 struct DiagnosticEvent: Codable, Hashable, Sendable {
     enum Kind: String, Codable, Sendable {
         case usage, refresh, profile, login, scheduler
+        case reset
     }
 
     /// Characters of the response body kept on the line.

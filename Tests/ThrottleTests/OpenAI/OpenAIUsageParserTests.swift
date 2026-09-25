@@ -136,6 +136,13 @@ final class OpenAIUsageParserTests: XCTestCase {
         XCTAssertEqual(try OpenAIUsageParser.parse(Data(two.utf8)).resetCreditsAvailable, 2)
     }
 
+    /// Outcome B4: `applicable_available_count` never decides the count.
+    func testApplicableCountNeverOverridesAvailableCount() throws {
+        let window = #""rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": 5}, "secondary_window": null}"#
+        let json = #"{"rate_limit_reset_credits": {"available_count": 1, "applicable_available_count": 0}, "# + window + "}"
+        XCTAssertEqual(try OpenAIUsageParser.parse(Data(json.utf8)).resetCreditsAvailable, 1)
+    }
+
     func testKeyDerivation() {
         XCTAssertEqual(OpenAIUsageParser.key(forDurationSeconds: 18_000), "5h")
         XCTAssertEqual(OpenAIUsageParser.key(forDurationSeconds: 604_800), "7d")

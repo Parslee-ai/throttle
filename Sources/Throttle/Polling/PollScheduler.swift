@@ -14,6 +14,18 @@ protocol CredentialResolving: Sendable {
         from store: AccountStore,
         using provider: any UsageProvider
     ) async throws -> AccountCredential
+
+    /// A credential other than `rejected`, which the provider just answered
+    /// 401 to: refreshed once if the store still holds `rejected`, or the one
+    /// another caller already rotated in. Same serialization and
+    /// never-cancelled rules as `validCredential`. Throws
+    /// `UsageError.needsLogin` when no usable credential can be had.
+    func refreshedCredential(
+        replacing rejected: AccountCredential,
+        for account: Account,
+        from store: AccountStore,
+        using provider: any UsageProvider
+    ) async throws -> AccountCredential
 }
 
 /// Loads the stored credential as-is. No refresh. The default when no
@@ -27,6 +39,21 @@ struct PassthroughCredentialResolver: CredentialResolving {
         using provider: any UsageProvider
     ) async throws -> AccountCredential {
         guard let credential = try await store.credential(for: account.id) else {
+            throw UsageError.needsLogin
+        }
+        return credential
+    }
+
+    /// Cannot refresh: hands back the stored credential when it differs from
+    /// the rejected one, otherwise reports that a sign-in is needed.
+    func refreshedCredential(
+        replacing rejected: AccountCredential,
+        for account: Account,
+        from store: AccountStore,
+        using provider: any UsageProvider
+    ) async throws -> AccountCredential {
+        guard let credential = try await store.credential(for: account.id),
+              credential.accessToken != rejected.accessToken else {
             throw UsageError.needsLogin
         }
         return credential
@@ -70,6 +97,11 @@ struct PollTimeoutError: Error, Hashable, Sendable {
 ///
 /// `stop()` cancels the timer and the cycle in flight. It never reaches into a
 /// credential refresh: the resolver owns those and lets them finish (D-7).
+///
+/// Spending a banked reset (`useReset`) is the one call here that is not a
+/// read. Only an explicit, confirmed user action reaches it; no cycle, timer
+/// tick, wake, or launch path calls it. It shares the resolver with polling,
+/// so a reset and a poll that both need a refresh produce one refresh.
 actor PollScheduler {
     private enum Trigger: String {
         case start, timer, refreshNow, wake
@@ -105,10 +137,45 @@ actor PollScheduler {
     /// marked stale.
     private var settledThisCycle: Set<UUID> = []
 
+    /// Accounts with a reset attempt running. A second attempt for one of
+    /// them is refused without a request.
+    private var resetsInFlight: Set<UUID> = []
+
+    /// The one usage read in flight per account, and who is waiting for it
+    /// to end. A poll and the read after a reset never overlap for one
+    /// account: whichever comes second waits for the first.
+    private struct ReadSlot {
+        let sequence: Int
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+    private var readSlots: [UUID: ReadSlot] = [:]
+    /// Numbers every usage read in start order.
+    private var readSequence = 0
+    /// The sequence number of each account's latest read that succeeded.
+    private var lastSuccessfulRead: [UUID: Int] = [:]
+
+    /// Budget for each reset request, including the credential it needs. A
+    /// reset still running when it expires is reported as unreachable; the
+    /// user's retry reuses the same attempt id, so it cannot spend twice.
+    static let resetTimeout: TimeInterval = 20
+
+    /// How long the read after a reset waits first, in seconds. A provider
+    /// answers `reset` before its usage endpoint reflects it: a read in the
+    /// same second still showed the old numbers, while one 43 s later showed
+    /// the new ones. Waited on the scheduler's clock, so tests drive it.
+    static let postResetReadDelay: TimeInterval = 5
+
+    /// This scheduler's settle delay: `postResetReadDelay` in the app. Tests
+    /// that are not about the delay pass 0 so a reset returns without the
+    /// test advancing the clock.
+    private let resetReadDelay: TimeInterval
+
     /// Cycles that ran to completion or to their deadline. Tests wait on this.
     private(set) var completedCycles = 0
     /// Cycles that started. Differs from `completedCycles` only mid-cycle.
     private(set) var startedCycles = 0
+    /// Callers of `waitForCompletedCycles` and the count each waits for.
+    private var cycleWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(
         store: AccountStore,
@@ -119,8 +186,10 @@ actor PollScheduler {
         clock: any PollClock,
         backoff: BackoffPolicy = BackoffPolicy(),
         backoffPersistence: BackoffPersistence? = nil,
-        diagnostics: Diagnostics? = nil
+        diagnostics: Diagnostics? = nil,
+        postResetReadDelay: TimeInterval = PollScheduler.postResetReadDelay
     ) {
+        self.resetReadDelay = max(0, postResetReadDelay)
         self.store = store
         self.providers = providers
         self.resolver = resolver
@@ -304,9 +373,22 @@ actor PollScheduler {
         }
     }
 
+    /// Returns once `completedCycles` reaches `count`, so a test waits for
+    /// the cycle's end itself rather than polling the counter.
+    func waitForCompletedCycles(_ count: Int) async {
+        guard completedCycles < count else { return }
+        await withCheckedContinuation { continuation in
+            cycleWaiters.append((count, continuation))
+        }
+    }
+
     private func cycleDidFinish() {
         cycleTask = nil
         completedCycles += 1
+        let done = completedCycles
+        let ready = cycleWaiters.filter { $0.count <= done }
+        cycleWaiters.removeAll { $0.count <= done }
+        for waiter in ready { waiter.continuation.resume() }
         if refreshQueued {
             refreshQueued = false
             launchCycle(trigger: .refreshNow)
@@ -403,6 +485,16 @@ actor PollScheduler {
 
     /// Fetches one account. Returns true when a request was actually started.
     private func poll(_ account: Account, provider: Provider) async -> Bool {
+        // The read after a reset is running for this account: wait for it,
+        // and when it brought a fresh reading, that reading is this cycle's.
+        if let running = readSlots[account.id]?.sequence {
+            await waitForReadInFlight(account.id)
+            if (lastSuccessfulRead[account.id] ?? 0) >= running {
+                settledThisCycle.insert(account.id)
+                return false
+            }
+        }
+
         let attemptAt = clock.now()
 
         if let until = backoff.shouldSkip(account: account.id, provider: provider, now: attemptAt) {
@@ -429,6 +521,36 @@ actor PollScheduler {
             return false
         }
 
+        guard await fetchAndRecord(account, adapter: adapter, provider: provider, attemptAt: attemptAt) else {
+            // The cycle deadline or stop() cancelled us. The deadline path
+            // marks the account stale; stop() wants nothing recorded.
+            return true
+        }
+        settledThisCycle.insert(account.id)
+        return true
+    }
+
+    /// Reads one account's usage under `perAccountTimeout` and records the
+    /// result in the cache and the backoff policy. Returns false when the
+    /// caller was cancelled, in which case nothing is recorded.
+    ///
+    /// With `onlyIfStillStored`, the result is dropped when the account left
+    /// the store while the read ran, so a removed row never gets its entry
+    /// back. A removal that lands after that check is caught by the cache
+    /// itself, which refuses writes for an account it was told is gone.
+    ///
+    /// The caller must have waited out any read in flight for the account
+    /// (`waitForReadInFlight`) with no suspension since: this claims the
+    /// account's read slot before its first `await`.
+    private func fetchAndRecord(
+        _ account: Account,
+        adapter: any UsageProvider,
+        provider: Provider,
+        attemptAt: Date,
+        onlyIfStillStored: Bool = false
+    ) async -> Bool {
+        let sequence = beginRead(account.id)
+        defer { endRead(account.id) }
         let timeout = settings.perAccountTimeout
         let store = store
         let resolver = resolver
@@ -444,8 +566,10 @@ actor PollScheduler {
                     return try await adapter.fetchStatus(account: account, credential: credential)
                 }
             }
+            if onlyIfStillStored, await storedAccount(account.id) == nil { return true }
             backoff.record(outcome: .success, for: account.id, provider: provider, now: clock.now())
             persistBackoffIfChanged()
+            lastSuccessfulRead[account.id] = sequence
             await cache.recordSuccess(status, at: attemptAt)
             await diagnostics?.record(DiagnosticEvent(
                 ts: clock.now(),
@@ -455,15 +579,255 @@ actor PollScheduler {
                 status: 200
             ))
         } catch is CancellationError {
-            // The cycle deadline or stop() cancelled us. The deadline path
-            // marks the account stale; stop() wants nothing recorded.
-            return true
+            return false
         } catch {
-            if Task.isCancelled { return true }
+            if Task.isCancelled { return false }
+            if onlyIfStillStored, await storedAccount(account.id) == nil { return true }
             await record(error: error, for: account, provider: provider, attemptAt: attemptAt)
         }
-        settledThisCycle.insert(account.id)
         return true
+    }
+
+    private func storedAccount(_ id: UUID) async -> Account? {
+        await store.accounts().first { $0.id == id }
+    }
+
+    // MARK: One read per account
+
+    private func beginRead(_ id: UUID) -> Int {
+        assert(readSlots[id] == nil, "a second concurrent usage read for one account")
+        readSequence += 1
+        readSlots[id] = ReadSlot(sequence: readSequence, waiters: readSlots[id]?.waiters ?? [])
+        return readSequence
+    }
+
+    private func endRead(_ id: UUID) {
+        let waiters = readSlots.removeValue(forKey: id)?.waiters ?? []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Returns once no usage read is in flight for the account. Nothing may
+    /// suspend between this returning and the caller's `beginRead`.
+    private func waitForReadInFlight(_ id: UUID) async {
+        while readSlots[id] != nil {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                readSlots[id]?.waiters.append(continuation)
+            }
+        }
+    }
+
+    // MARK: Banked reset (user action only)
+
+    /// Spends one banked limit reset for the account, on the user's explicit,
+    /// confirmed request. Nothing in the poll cycle, the timer, wake, or launch
+    /// calls this.
+    ///
+    /// - A second call for an account whose reset is still running returns
+    ///   `.alreadyRunning` and sends nothing.
+    /// - The credential comes from the same resolver polling uses. A 401 on
+    ///   the reset forces one refresh and resends with the same `attemptID`;
+    ///   a second 401 flags the account `needsLogin` and keeps its row.
+    /// - A 429 on the reset is reported with its time and leaves the poll
+    ///   backoff exactly as it was.
+    /// - After a spend, after any answer that means the count is out of
+    ///   date, and after a 5xx (the reset may have been spent), that one
+    ///   account's usage is read once, `postResetReadDelay` after the answer
+    ///   so the provider has settled, unless its provider or
+    ///   the account is under a backoff horizon, in which case the row keeps
+    ///   its last good reading with its age. No other account is touched.
+    /// - An account removed while the reset ran gets no cache entry back.
+    /// - While the account or its provider is under a backoff horizon (a rate
+    ///   limit, an error backoff, or a forbidden hold), nothing is sent: the
+    ///   result is `.rateLimited(until:)` with the horizon's end, because one
+    ///   more request only extends the penalty.
+    /// - The read after the reset never overlaps a poll's read of the same
+    ///   account. It waits for one in flight, and skips when a read that
+    ///   started after the reset finished has already succeeded.
+    func useReset(accountID: UUID, attemptID: UUID) async -> ResetResult {
+        guard resetsInFlight.insert(accountID).inserted else {
+            return .alreadyRunning
+        }
+        defer { resetsInFlight.remove(accountID) }
+
+        guard let account = await storedAccount(accountID) else { return .unsupported }
+        let provider = account.provider
+        guard let adapter = providers[provider] else { return .unsupported }
+
+        let result: ResetResult
+        if let until = backoff.shouldSkip(account: accountID, provider: provider, now: clock.now()) {
+            result = .rateLimited(until: until)
+            await diagnose(account, provider: provider, at: clock.now(),
+                           message: "Reset not sent; backing off until \(until.formatted(.iso8601))")
+        } else {
+            result = await attemptReset(account, adapter: adapter, attemptID: attemptID)
+        }
+        // Reads numbered above this one started after the reset finished.
+        let completedAt = readSequence
+        await diagnostics?.record(DiagnosticEvent(
+            ts: clock.now(),
+            provider: provider,
+            accountID: accountID,
+            kind: .scheduler,
+            message: "Reset attempt ended: \(Self.logDescription(of: result))"
+        ))
+
+        if result == .needsLogin, let current = await storedAccount(accountID) {
+            await record(error: UsageError.needsLogin, for: current, provider: provider, attemptAt: clock.now())
+        }
+        if result.wantsUsageRead {
+            // The account stays in `resetsInFlight` through the wait and the
+            // read, so a second reset is still refused and the row keeps its
+            // spinner until the fresh numbers land. A cancelled wait (the app
+            // quitting) sends nothing.
+            if resetReadDelay > 0 {
+                do {
+                    try await clock.sleep(for: resetReadDelay)
+                } catch {
+                    return result
+                }
+            }
+            await readUsageAfterReset(accountID, provider: provider, completedAt: completedAt)
+        }
+        return result
+    }
+
+    /// Whether a reset is running for the account.
+    func isResetInFlight(_ accountID: UUID) -> Bool {
+        resetsInFlight.contains(accountID)
+    }
+
+    /// Sends the reset, and on an auth rejection refreshes once and resends
+    /// the same attempt. Each send has its own `resetTimeout`.
+    private func attemptReset(_ account: Account, adapter: any UsageProvider, attemptID: UUID) async -> ResetResult {
+        let store = store
+        let resolver = resolver
+        let clock = clock
+        let timeout = Self.resetTimeout
+        do {
+            let firstDeadline = clock.now().addingTimeInterval(timeout)
+            let firstBudget: @Sendable () -> TimeInterval = { firstDeadline.timeIntervalSince(clock.now()) }
+            let (credential, first) = try await withTimeout(timeout) { () -> (AccountCredential, Result<ResetOutcome, any Error>) in
+                try await FetchBudget.$remaining.withValue(firstBudget) {
+                    let credential = try await resolver.validCredential(for: account, from: store, using: adapter)
+                    // A caller that gave up while the credential resolved
+                    // (the timeout, the app quitting) sends nothing. The
+                    // refresh itself is the resolver's and still finishes.
+                    try Task.checkCancellation()
+                    do {
+                        let outcome = try await adapter.useReset(account: account, credential: credential, attemptID: attemptID)
+                        return (credential, .success(outcome))
+                    } catch {
+                        return (credential, .failure(error))
+                    }
+                }
+            }
+            switch first {
+            case .success(let outcome):
+                return .outcome(outcome)
+            case .failure(let error) where Self.isAuthRejection(error):
+                // One forced refresh, then the same attempt again. A second
+                // rejection falls through to `.needsLogin` below.
+                let retryDeadline = clock.now().addingTimeInterval(timeout)
+                let retryBudget: @Sendable () -> TimeInterval = { retryDeadline.timeIntervalSince(clock.now()) }
+                let outcome = try await withTimeout(timeout) {
+                    try await FetchBudget.$remaining.withValue(retryBudget) {
+                        let fresh = try await resolver.refreshedCredential(
+                            replacing: credential,
+                            for: account,
+                            from: store,
+                            using: adapter
+                        )
+                        try Task.checkCancellation()
+                        return try await adapter.useReset(account: account, credential: fresh, attemptID: attemptID)
+                    }
+                }
+                return .outcome(outcome)
+            case .failure(let error):
+                return classifyReset(error)
+            }
+        } catch {
+            return classifyReset(error)
+        }
+    }
+
+    private static func isAuthRejection(_ error: any Error) -> Bool {
+        switch error {
+        case UsageError.needsLogin, UsageError.redirect: return true
+        default: return false
+        }
+    }
+
+    /// Maps a reset failure onto the provider-neutral result. Strings that can
+    /// reach the screen are redacted here as well as in the adapter.
+    private func classifyReset(_ error: any Error) -> ResetResult {
+        switch error {
+        case UsageError.needsLogin, UsageError.redirect:
+            return .needsLogin
+        case UsageError.forbidden(let reason):
+            return .forbidden(reason: Redactor.redact(reason))
+        case UsageError.rateLimited(let retryAfter):
+            guard let retryAfter, retryAfter.isFinite, retryAfter > 0 else { return .rateLimited(until: nil) }
+            return .rateLimited(until: clock.now().addingTimeInterval(min(retryAfter, BackoffPolicy.rateLimitCap)))
+        case UsageError.httpStatus(let status):
+            return .providerError(status: status)
+        case UsageError.invalidResponse, UsageError.tooLarge:
+            return .unexpected
+        case UsageError.transport, is PollTimeoutError, is CancellationError:
+            return .unreachable
+        case is ResetUnsupportedError:
+            return .unsupported
+        default:
+            return .unexpected
+        }
+    }
+
+    /// The one usage read after a reset: this account only, through the same
+    /// fetch path a cycle uses, and never inside a backoff horizon. A poll's
+    /// read of the account in flight is waited out first; when a read that
+    /// started after the reset finished (`completedAt`) has succeeded, the
+    /// row already holds post-reset numbers and nothing more is sent.
+    private func readUsageAfterReset(_ accountID: UUID, provider: Provider, completedAt: Int) async {
+        // Looked up again so a rename or move during the reset is honoured.
+        guard let account = await storedAccount(accountID), let adapter = providers[provider] else { return }
+        await waitForReadInFlight(accountID)
+        if (lastSuccessfulRead[accountID] ?? 0) > completedAt {
+            await diagnose(account, provider: provider, at: clock.now(),
+                           message: "Usage read after reset skipped; a poll already read it after the reset")
+            return
+        }
+        let attemptAt = clock.now()
+        if let until = backoff.shouldSkip(account: accountID, provider: provider, now: attemptAt) {
+            await diagnose(
+                account,
+                provider: provider,
+                at: attemptAt,
+                message: "Usage read after reset skipped; backing off until \(until.formatted(.iso8601))"
+            )
+            return
+        }
+        _ = await fetchAndRecord(account, adapter: adapter, provider: provider, attemptAt: attemptAt, onlyIfStillStored: true)
+    }
+
+    /// A diagnostics phrase for a reset result. Never carries an id or a body.
+    private static func logDescription(of result: ResetResult) -> String {
+        switch result {
+        case .outcome(.reset): return "reset"
+        case .outcome(.nothingToReset): return "nothing to reset"
+        case .outcome(.noCredit): return "no credit"
+        case .outcome(.cooldown(let until)): return "cooldown until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
+        case .outcome(.notAvailable): return "not available"
+        case .outcome(.unexpected): return "unexpected answer"
+        case .rateLimited(let until): return "rate limited until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
+        case .needsLogin: return "needs login"
+        case .forbidden(let reason): return "forbidden: \(reason)"
+        case .providerError(let status): return "provider error HTTP \(status)"
+        case .unreachable: return "unreachable"
+        case .unexpected: return "unexpected reply"
+        case .unsupported: return "unsupported"
+        case .alreadyRunning: return "already running"
+        }
     }
 
     /// Maps a failure onto an `AccountState`, a backoff outcome, and a cache

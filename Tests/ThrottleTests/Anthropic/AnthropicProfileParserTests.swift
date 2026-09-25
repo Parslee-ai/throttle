@@ -36,6 +36,20 @@ final class AnthropicProfileParserTests: XCTestCase {
         XCTAssertEqual(profile.email, "a@example.com")
     }
 
+    /// The reset is sent to `organization.uuid`; an id that is not a plain id
+    /// never reaches a URL path.
+    func testOrganizationUUIDIsReadAndValidated() throws {
+        let profile = try XCTUnwrap(AnthropicProfileParser.parse(try AnthropicFixtures.data("anthropic-profile")))
+        XCTAssertEqual(profile.organizationUUID, "00000000-0000-0000-0000-000000000000")
+
+        let missing = try XCTUnwrap(AnthropicProfileParser.parse(Data(#"{"organization":{"organization_type":"claude_pro"}}"#.utf8)))
+        XCTAssertNil(missing.organizationUUID)
+        let pathy = try XCTUnwrap(AnthropicProfileParser.parse(Data(#"{"organization":{"uuid":"../org/other"}}"#.utf8)))
+        XCTAssertNil(pathy.organizationUUID)
+        let number = try XCTUnwrap(AnthropicProfileParser.parse(Data(#"{"organization":{"uuid":42}}"#.utf8)))
+        XCTAssertNil(number.organizationUUID)
+    }
+
     func testNotAnObjectIsNil() {
         XCTAssertNil(AnthropicProfileParser.parse(Data("[]".utf8)))
         XCTAssertNil(AnthropicProfileParser.parse(Data("<html>".utf8)))

@@ -1,0 +1,16 @@
+{
+  "limits": [
+    { "kind": "session", "percent": 42, "resets_at": "2026-07-13T15:00:00Z", "is_active": true },
+    { "kind": "weekly_all", "percent": "68.04", "resets_at": 1784544000, "is_active": true },
+    { "kind": "weekly_scoped", "percent": 75.25, "resets_at": "2026-07-20T12:00:00Z", "scope": { "model": { "display_name": "Fable" } } },
+    { "kind": "weekly_scoped", "percent": 10, "resets_at": null, "scope": { "model": { "display_name": "Claude Opus" } } }
+  ],
+  "cedar_ember": {
+    "eligible": false,
+    "ineligible_reason": "tier",
+    "grants": [
+      { "id": "grant_test_a", "resets_total": 1, "resets_left": 1, "usable_now": true, "ends_at": "2026-08-01T00:00:00Z" }
+    ],
+    "next_grant_id": "grant_test_a"
+  }
+}

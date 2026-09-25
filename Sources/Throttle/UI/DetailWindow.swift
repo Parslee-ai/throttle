@@ -11,6 +11,8 @@ struct DetailWindow: View {
     @Bindable var model: AppModel
 
     @State private var pendingRemoval: Account?
+    /// The account whose reset is waiting for the user's answer.
+    @State private var pendingReset: Account?
     @State private var showingSettings = false
     @State private var importPicker: ImportPicker?
 
@@ -27,7 +29,9 @@ struct DetailWindow: View {
                         statuses: model.statuses,
                         planLabels: planLabels,
                         now: context.date,
-                        actions: panelActions
+                        actions: panelActions,
+                        resetsInFlight: model.resetsInFlight,
+                        resetNotices: model.resetNotices
                     )
                 }
             }
@@ -40,26 +44,56 @@ struct DetailWindow: View {
         }
         .frame(width: PopupMetrics.width)
         .background(Colors.windowBackground)
-        .sheet(item: $model.activeLogin) { flow in
-            LoginSheet(flow: flow) { model.activeLogin = nil }
+        // Every question and form is a panel modal, drawn inside this
+        // window. A sheet or dialog is a window of its own, and clicking in
+        // it closes the menu bar panel (see `PanelModal`). Later modifiers
+        // draw on top; a login is always on top.
+        .panelModal(item: pendingRemoval) { account in
+            ConfirmationCard(
+                title: "Remove \(account.displayName)?",
+                confirmTitle: "Remove",
+                confirmRole: .destructive,
+                onConfirm: {
+                    pendingRemoval = nil
+                    model.remove(account)
+                },
+                onCancel: { pendingRemoval = nil }
+            ) {
+                Text(Self.removalMessage)
+                    .font(.system(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(model: model) { showingSettings = false }
+        .panelModal(item: pendingReset) { account in
+            let cached = model.statuses[account.id]
+            ResetConfirmation(
+                displayName: account.displayName,
+                count: cached?.status.resetCreditsAvailable ?? 0,
+                windows: Formatting.popupOrder(Formatting.windows(of: cached)),
+                onConfirm: {
+                    pendingReset = nil
+                    model.useReset(account)
+                },
+                onCancel: { pendingReset = nil }
+            )
         }
-        .sheet(item: $importPicker) { picker in
+        .panelModal(item: importPicker) { picker in
             ImportPickerSheet(picker: picker, onImport: model.importAccount) { importPicker = nil }
         }
-        .confirmationDialog(
-            "Remove \(pendingRemoval?.displayName ?? "this account")?",
-            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
-            presenting: pendingRemoval
-        ) { account in
-            Button("Remove", role: .destructive) { model.remove(account) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Throttle forgets the login. Nothing changes at the provider.")
+        .panelModal(isPresented: showingSettings) {
+            SettingsView(model: model) { showingSettings = false }
         }
+        // The login lives on the model, not in this view: when the panel
+        // closes while the user is in the browser, the flow keeps running,
+        // and reopening the panel shows it again, or its result.
+        .panelModal(item: model.activeLogin) { flow in
+            LoginSheet(flow: flow) { model.activeLogin = nil }
+        }
+        // Under a card taller than the content, the panel grows; paint it.
+        .background(Colors.windowBackground)
     }
+
+    static let removalMessage = "Throttle forgets the login. Nothing changes at the provider."
 
     private var planLabels: [UUID: String] {
         var labels: [UUID: String] = [:]
@@ -79,7 +113,13 @@ struct DetailWindow: View {
             moveDown: { model.moveDown($0) },
             moveInSection: { model.move(in: $0, from: $1, to: $2) },
             rename: { model.rename($0, to: $1) },
-            remove: { pendingRemoval = $0 }
+            remove: { pendingRemoval = $0 },
+            useReset: { account in
+                // One confirmation at a time, and none while this row's reset runs.
+                guard pendingReset == nil, !model.resetsInFlight.contains(account.id) else { return }
+                pendingReset = account
+            },
+            dismissResetNotice: { model.dismissResetNotice(for: $0) }
         )
     }
 

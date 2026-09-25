@@ -19,8 +19,12 @@ column per window: its name, the percent left, a bar, and when it resets. The
 window follows the system's light or dark appearance. Double-click an account's
 name, or choose **Rename…** from its menu, to give it a name of your own.
 
-Throttle is read-only. It never sends a prompt, spends a token, or changes
-anything on your account.
+Throttle reads; it does not spend. Checking your limits never sends a prompt,
+spends a token, or changes anything on your account. The one exception is a
+banked limit reset: when an account has resets available, its row shows a
+**Use reset** button, and Throttle spends one only after you click it and
+confirm. It then reads that account's limits again and shows the provider's
+fresh numbers.
 
 ## Install
 
