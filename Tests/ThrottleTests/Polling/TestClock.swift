@@ -28,9 +28,18 @@ final class TestClock: PollClock, @unchecked Sendable {
         var sleepers: [Sleeper] = []
         var recorded: [RecordedSleep] = []
         var cancelledBeforeRegistration: Set<UUID> = []
+        /// The deadline of every sleep that parked, by interval, in order.
+        var parked: [TimeInterval: [Date]] = [:]
+        var parkWaiters: [ParkWaiter] = []
         /// Bumped on every registration, wake, and cancellation; `settle()`
         /// waits for it to stop moving.
         var version = 0
+    }
+
+    private struct ParkWaiter {
+        let interval: TimeInterval
+        let number: Int
+        let continuation: CheckedContinuation<Void, Never>
     }
 
     private let state: OSAllocatedUnfairLock<State>
@@ -59,12 +68,17 @@ final class TestClock: PollClock, @unchecked Sendable {
         }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                let alreadyCancelled: Bool = state.withLock { s in
-                    if s.cancelledBeforeRegistration.remove(id) != nil { return true }
+                let (alreadyCancelled, ready): (Bool, [ParkWaiter]) = state.withLock { s in
+                    if s.cancelledBeforeRegistration.remove(id) != nil { return (true, []) }
                     s.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation))
                     s.version += 1
-                    return false
+                    s.parked[interval, default: []].append(deadline)
+                    let count = s.parked[interval]?.count ?? 0
+                    let ready = s.parkWaiters.filter { $0.interval == interval && $0.number <= count }
+                    s.parkWaiters.removeAll { $0.interval == interval && $0.number <= count }
+                    return (false, ready)
                 }
+                for waiter in ready { waiter.continuation.resume() }
                 if alreadyCancelled {
                     continuation.resume(throwing: CancellationError())
                 }
@@ -84,6 +98,32 @@ final class TestClock: PollClock, @unchecked Sendable {
     }
 
     // MARK: Driving
+
+    /// How many sleeps of `interval` have parked on this clock so far.
+    func parkedCount(interval: TimeInterval) -> Int {
+        state.withLock { $0.parked[interval]?.count ?? 0 }
+    }
+
+    /// Waits until the `number`th sleep of `interval` (1-based, counted
+    /// since the clock was made) has parked, and returns its deadline. The
+    /// sleep is then waiting on the clock, so advancing to the deadline is
+    /// certain to wake it.
+    func parkedSleep(interval: TimeInterval, number: Int, file: StaticString = #filePath, line: UInt = #line) async -> Date {
+        await awaitEvent("sleep \(number) of \(interval) s parked", file: file, line: line) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let parked: Bool = self.state.withLock { s in
+                    if (s.parked[interval]?.count ?? 0) >= number { return true }
+                    s.parkWaiters.append(ParkWaiter(interval: interval, number: number, continuation: continuation))
+                    return false
+                }
+                if parked { continuation.resume() }
+            }
+        }
+        return state.withLock { s in
+            let deadlines = s.parked[interval] ?? []
+            return number <= deadlines.count ? deadlines[number - 1] : s.now
+        }
+    }
 
     /// Every sleep requested so far, in request order.
     var recordedSleeps: [RecordedSleep] {

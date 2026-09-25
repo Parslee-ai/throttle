@@ -270,8 +270,10 @@ final class OpenAIProviderTests: XCTestCase {
 
     // MARK: - ISC-77: read-only guarantee
 
-    /// The adapter's source must never mention the credit-spending endpoint
-    /// or the completions endpoint, in code or in a string.
+    /// The adapter's source never names the completions endpoint. The one
+    /// spending path, the reset consume URL, is spelled out only in
+    /// `OpenAIEndpoints.swift`, and only `OpenAIProvider.swift` refers to it,
+    /// from `useReset`, which runs on an explicit user action.
     func testOpenAISourcesNeverNameSpendingEndpoints() throws {
         try RepoAudit.requireRepositoryAccess()
         let directory = OpenAIFixtures.openAISourcesDirectory
@@ -280,9 +282,19 @@ final class OpenAIProviderTests: XCTestCase {
 
         for file in files {
             let text = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)
-            XCTAssertFalse(text.lowercased().contains("consume"), "\(file) mentions consume")
             XCTAssertFalse(text.contains("/responses"), "\(file) mentions /responses")
+            if file != "OpenAIEndpoints.swift" {
+                XCTAssertFalse(text.contains("rate-limit-reset-credits"), "\(file) spells out the reset path")
+            }
+            if file != "OpenAIEndpoints.swift" && file != "OpenAIProvider.swift" {
+                XCTAssertFalse(text.lowercased().contains("consume"), "\(file) mentions consume")
+            }
         }
+        let provider = try String(contentsOf: directory.appendingPathComponent("OpenAIProvider.swift"), encoding: .utf8)
+        XCTAssertEqual(
+            provider.components(separatedBy: "URLRequest(url: OpenAIEndpoints.resetConsumeURL)").count - 1, 1,
+            "exactly one request is built for the consume URL"
+        )
     }
 
     // MARK: - Helpers

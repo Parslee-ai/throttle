@@ -5,7 +5,7 @@ final class AnthropicLoginTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
 
     private static let tokenBody = """
-    {"access_token":"sk-ant-oat01-access","refresh_token":"sk-ant-ort01-refresh","expires_in":28800,\
+    {"access_token":"\(FakeToken.anthropicAccess)","refresh_token":"\(FakeToken.anthropicRefresh)","expires_in":28800,\
     "refresh_token_expires_in":2592000,"scope":"user:profile user:inference","token_type":"Bearer"}
     """
     private static let profileBody = """
@@ -121,10 +121,10 @@ final class AnthropicLoginTests: XCTestCase {
     }
 
     func testPastedSetupTokenIsRejected() {
-        XCTAssertThrowsError(try AnthropicLogin.parsePastedCode("sk-ant-oat01-abcdef#x", fallbackState: "s")) { error in
+        XCTAssertThrowsError(try AnthropicLogin.parsePastedCode(FakeToken.anthropicSetupToken + "#x", fallbackState: "s")) { error in
             XCTAssertEqual(error as? LoginError, .setupTokenNotSupported)
         }
-        XCTAssertThrowsError(try AnthropicLogin.parsePastedCode("sk-ant-api03-abcdef", fallbackState: "s")) { error in
+        XCTAssertThrowsError(try AnthropicLogin.parsePastedCode(FakeToken.anthropicAPIKey, fallbackState: "s")) { error in
             XCTAssertEqual(error as? LoginError, .setupTokenNotSupported)
         }
     }
@@ -184,10 +184,10 @@ final class AnthropicLoginTests: XCTestCase {
         XCTAssertEqual(PKCE.challenge(for: verifier), challenge, "verifier must match the challenge we sent")
 
         XCTAssertEqual(client.requests[1].url, AnthropicEndpoints.profile)
-        XCTAssertEqual(client.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer sk-ant-oat01-access")
+        XCTAssertEqual(client.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer \(FakeToken.anthropicAccess)")
 
-        XCTAssertEqual(result.credential.accessToken, "sk-ant-oat01-access")
-        XCTAssertEqual(result.credential.refreshToken, "sk-ant-ort01-refresh")
+        XCTAssertEqual(result.credential.accessToken, FakeToken.anthropicAccess)
+        XCTAssertEqual(result.credential.refreshToken, FakeToken.anthropicRefresh)
         XCTAssertEqual(result.credential.expiresAt, fixedNow.addingTimeInterval(28800))
         XCTAssertEqual(result.credential.scopes, ["user:profile", "user:inference"])
         XCTAssertNil(result.credential.accountID)
@@ -215,7 +215,7 @@ final class AnthropicLoginTests: XCTestCase {
 
     func testExchangeFailureIsReportedRedacted() async throws {
         let client = AuthMockHTTPClient(responses: [
-            AuthTestSupport.json(400, #"{"error":"invalid_grant","error_description":"bad code sk-ant-oat01-leak"}"#),
+            AuthTestSupport.json(400, #"{"error":"invalid_grant","error_description":"bad code \#(FakeToken.anthropicLeak)"}"#),
             AuthTestSupport.json(401, #"{"error":{"type":"authentication_error","message":"nope"}}"#),
         ])
         let session = try await makeLogin(client: client).begin(mode: .manualCode)

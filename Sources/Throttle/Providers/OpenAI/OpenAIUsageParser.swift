@@ -163,3 +163,27 @@ enum OpenAIUsageParser {
         }
     }
 }
+
+/// The reset endpoint's 200 answer:
+/// `{"code": "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed",
+/// "windows_reset": <int>}`, sometimes with a `credit` object that is ignored.
+struct OpenAIResetAnswer: Equatable, Sendable {
+    var code: String
+    /// How many windows the provider says it reset. Parsed for completeness;
+    /// never used to invent window numbers, which come from a fresh read.
+    var windowsReset: Int
+
+    /// `nil` when the body is not JSON or has no string `code`.
+    static func parse(_ body: Data) -> OpenAIResetAnswer? {
+        guard let json = try? JSONSerialization.jsonObject(with: body),
+              let root = json as? [String: Any],
+              let code = root["code"] as? String else {
+            return nil
+        }
+        let windows = (root["windows_reset"] as? NSNumber).flatMap { number -> Int? in
+            // A JSON bool also bridges to NSNumber; it is not a count.
+            CFGetTypeID(number) == CFBooleanGetTypeID() ? nil : number.intValue
+        } ?? 0
+        return OpenAIResetAnswer(code: code, windowsReset: max(0, windows))
+    }
+}

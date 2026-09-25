@@ -33,7 +33,7 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(client.requests.count, 2, "the usage read, then the one-time plan read")
         XCTAssertEqual(client.requests.last?.url, AnthropicEndpoints.profile)
         let request = try XCTUnwrap(client.requests.first)
-        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1&cedar_ember=1")
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(AnthropicSampleSecret.accessToken)")
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
@@ -112,7 +112,7 @@ final class AnthropicProviderTests: XCTestCase {
     }
 
     func testForbiddenReasonIsRedacted() async {
-        let body = Data(#"{"type":"error","error":{"type":"permission_error","message":"Denied for Bearer sk-ant-oat01-secret-value-1234567890"}}"#.utf8)
+        let body = Data(#"{"type":"error","error":{"type":"permission_error","message":"Denied for Bearer \#(FakeToken.anthropicSecret)"}}"#.utf8)
         await assertThrows(AnthropicMockHTTPClient(status: 403, body: body)) { error in
             guard case UsageError.forbidden(let reason) = error else { return XCTFail("got \(error)") }
             XCTAssertFalse(reason.contains("secret"), reason)

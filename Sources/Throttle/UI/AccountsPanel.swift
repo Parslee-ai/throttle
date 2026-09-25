@@ -12,6 +12,9 @@ struct AccountsPanelActions {
     var moveInSection: @MainActor (Provider, IndexSet, Int) -> Void = { _, _, _ in }
     var rename: @MainActor (Account, String) -> Void = { _, _ in }
     var remove: @MainActor (Account) -> Void = { _ in }
+    /// Asks for the reset confirmation for the account.
+    var useReset: @MainActor (Account) -> Void = { _ in }
+    var dismissResetNotice: @MainActor (Account) -> Void = { _ in }
 }
 
 /// Every account, one section per provider, drawn from plain data: the
@@ -28,6 +31,10 @@ struct AccountsPanel: View {
     let planLabels: [UUID: String]
     let now: Date
     var actions = AccountsPanelActions()
+    /// Accounts with a reset running.
+    var resetsInFlight: Set<UUID> = []
+    /// Each account's reset message, if one is showing.
+    var resetNotices: [UUID: ResetNotice] = [:]
 
     @State private var reportedHeights: [String: CGFloat] = [:]
 
@@ -135,8 +142,12 @@ struct AccountsPanel: View {
                     moveUp: { actions.moveUp(account) },
                     moveDown: { actions.moveDown(account) },
                     rename: { actions.rename(account, $0) },
-                    remove: { actions.remove(account) }
-                )
+                    remove: { actions.remove(account) },
+                    useReset: { actions.useReset(account) },
+                    dismissResetNotice: { actions.dismissResetNotice(account) }
+                ),
+                isResetting: resetsInFlight.contains(account.id),
+                resetNotice: resetNotices[account.id]
             )
             if !isLast {
                 Rectangle()

@@ -330,7 +330,7 @@ final class PollSchedulerTests: XCTestCase {
     func testErrorMessagesAreRedacted() async throws {
         let f = makeFixture()
         let account = try await f.addAccount(.openai)
-        f.openai.setBehavior(.fail(.invalidResponse("rejected Bearer sk-ant-secret-value-1234567890")), for: account)
+        f.openai.setBehavior(.fail(.invalidResponse("rejected Bearer \(FakeToken.anthropicBareSecret)")), for: account)
         await f.scheduler.start()
         await f.waitForCycles(1)
         let entry = try await f.requireEntry(account)

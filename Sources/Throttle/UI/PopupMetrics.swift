@@ -18,8 +18,11 @@ enum PopupMetrics {
     static let columnLineSpacing: CGFloat = 14
     static let barHeight: CGFloat = 4
     static let rowVerticalPadding: CGFloat = 12
-    /// Space between the actions button and the window's right edge.
+    /// Space between the actions button and the window's right edge, when
+    /// the row has room for it. A narrower row gives this up first.
     static let actionsTrailingPadding: CGFloat = 14
+    /// The least space between the last column and the actions button.
+    static let actionsMinGap: CGFloat = 4
     /// Extra space above every provider section after the first.
     static let sectionSpacing: CGFloat = 20
     /// Width reserved for the account's number before its name.
@@ -33,6 +36,20 @@ enum PopupMetrics {
 
     /// Gap between the identity column and the first window column.
     static var identityGap: CGFloat { columnsLeading - horizontalPadding - identityWidth }
+
+    /// Where the actions button may start at the earliest, from the row's
+    /// left edge: past the last column, so it never covers one.
+    static var actionsLeading: CGFloat {
+        columnsLeading + columnsLineWidth + actionsMinGap
+    }
+
+    /// From the leading edge of the column in `slot` (0-based within its
+    /// line) to the end of the line: the room a reset message may take
+    /// without reaching the actions button.
+    static func lineRemainder(fromSlot slot: Int) -> CGFloat {
+        let slot = min(max(slot, 0), columnsPerLine - 1)
+        return columnsLineWidth - CGFloat(slot) * (columnWidth + columnGap)
+    }
 
     /// The width of one full line of columns.
     static var columnsLineWidth: CGFloat {

@@ -52,8 +52,59 @@ actor TokenRefresher {
             try await store.updateCredential(rotated, for: account.id)
             return rotated
         }
-        inFlight[account.id] = task
-        defer { inFlight[account.id] = nil }
+        return try await run(task, for: account.id)
+    }
+
+    /// A credential other than `rejected`, which the provider just answered
+    /// 401 to. When the store already holds a different credential (another
+    /// caller rotated it meanwhile) that one is returned with no request;
+    /// otherwise the stored pair is refreshed once, persisted, and returned.
+    ///
+    /// Same guarantees as `validCredential`: at most one refresh per account
+    /// in flight, a caller that arrives during one waits for it, and the
+    /// refresh runs detached so cancelling a caller never cancels it. A
+    /// rejected refresh throws `UsageError.needsLogin`.
+    func refreshedCredential(
+        replacing rejected: AccountCredential,
+        for account: Account,
+        from store: AccountStore,
+        using provider: any UsageProvider
+    ) async throws -> AccountCredential {
+        // Let whatever is already running finish first; it may have rotated
+        // the pair already. Each task is awaited once, so a finished task
+        // still parked in the map cannot spin this loop.
+        var awaited: Task<AccountCredential, Error>?
+        while let task = inFlight[account.id], task != awaited {
+            awaited = task
+            let current = try await task.value
+            if current.accessToken != rejected.accessToken { return current }
+        }
+
+        let task = Task.detached(priority: .userInitiated) {
+            guard let stored = try await store.credential(for: account.id) else {
+                throw UsageError.needsLogin
+            }
+            guard stored.accessToken == rejected.accessToken else {
+                return stored
+            }
+            let rotated = try await provider.refresh(credential: stored)
+            try await store.updateCredential(rotated, for: account.id)
+            return rotated
+        }
+        return try await run(task, for: account.id)
+    }
+
+    /// Parks `task` as the account's one refresh in flight until it ends. It
+    /// clears only its own slot, so a later task is never unparked by an
+    /// earlier caller resuming late.
+    private func run(
+        _ task: Task<AccountCredential, Error>,
+        for accountID: UUID
+    ) async throws -> AccountCredential {
+        inFlight[accountID] = task
+        defer {
+            if inFlight[accountID] == task { inFlight[accountID] = nil }
+        }
         return try await task.value
     }
 

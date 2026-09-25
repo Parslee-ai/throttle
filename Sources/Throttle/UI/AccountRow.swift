@@ -11,6 +11,9 @@ struct AccountRowActions {
     /// Saves a new name. An empty string clears the nickname.
     var rename: @MainActor (String) -> Void = { _ in }
     var remove: @MainActor () -> Void = {}
+    /// Asks for the reset confirmation. Nothing is spent until it is confirmed.
+    var useReset: @MainActor () -> Void = {}
+    var dismissResetNotice: @MainActor () -> Void = {}
 }
 
 /// One account in the detail window (ISC-117 through ISC-124): its number,
@@ -26,6 +29,10 @@ struct AccountRow: View {
     let isFirstInSection: Bool
     let isLastInSection: Bool
     var actions = AccountRowActions()
+    /// A banked reset for this account is being spent.
+    var isResetting = false
+    /// The last reset's message for this row, if one is showing.
+    var resetNotice: ResetNotice?
 
     @State private var isRenaming = false
     @State private var draftName = ""
@@ -40,7 +47,11 @@ struct AccountRow: View {
     private var laneWindows: [UsageWindow] { windows.filter(\.isLane) }
 
     /// Windows dim whenever they are not a current, successful reading.
-    private var dimmed: Bool {
+    private var dimmed: Bool { Self.isDimmed(cached) }
+
+    /// Whether a row with this status draws dimmed, which also greys its Use
+    /// reset button: no reading, a stale one, or any state but ok.
+    static func isDimmed(_ cached: CachedStatus?) -> Bool {
         guard let cached else { return true }
         if cached.isStale { return true }
         if case .ok = cached.status.state { return false }
@@ -60,9 +71,19 @@ struct AccountRow: View {
         .padding(.leading, PopupMetrics.horizontalPadding)
         .padding(.vertical, PopupMetrics.rowVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .trailing) {
-            actionsMenu
-                .padding(.trailing, PopupMetrics.actionsTrailingPadding)
+        .overlay {
+            // Sits `actionsTrailingPadding` in from the right edge, like the
+            // window's other trailing controls. When the row is narrower (a
+            // visible scroller takes its share) the trailing space shrinks
+            // first, and the leading spacer's minimum keeps the button clear
+            // of the last column, so it never covers a bar.
+            HStack(spacing: 0) {
+                Spacer(minLength: PopupMetrics.actionsLeading)
+                actionsMenu
+                Spacer(minLength: 0)
+                    .frame(maxWidth: PopupMetrics.actionsTrailingPadding)
+                    .layoutPriority(1)
+            }
         }
         .contentShape(Rectangle())
         .contextMenu { rowMenu }
@@ -246,12 +267,44 @@ struct AccountRow: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             } else {
-                columnLines(columns)
+                VStack(alignment: .leading, spacing: 6) {
+                    columnLines(columns)
+                    if let notice = noticeBelowColumns {
+                        ResetNoticeLine(notice: notice, onDismiss: actions.dismissResetNotice)
+                            .frame(width: PopupMetrics.columnsLineWidth, alignment: .leading)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.3), value: resetNotice)
                 if !laneWindows.isEmpty {
                     lanes
                 }
             }
         }
+    }
+
+    /// The resets column's place on its line of columns (0-based), when the
+    /// row has one. It always comes after the windows.
+    private var resetsSlot: Int? {
+        guard let index = columns.firstIndex(where: { if case .resetCredits = $0 { true } else { false } }) else {
+            return nil
+        }
+        return index % PopupMetrics.columnsPerLine
+    }
+
+    /// The message, when it does not fit on one line in the resets column's
+    /// status line (the room to the end of its line of columns). It then
+    /// takes a line of its own under the columns, the full width of a line,
+    /// so it is never cut or squeezed into a narrow column.
+    private var noticeBelowColumns: ResetNotice? {
+        guard let notice = resetNotice, !isResetting, let slot = resetsSlot else { return nil }
+        return Self.noticeGoesBelowColumns(notice.text, resetsSlot: slot) ? notice : nil
+    }
+
+    /// Whether a message for a resets column in `resetsSlot` is drawn on its
+    /// own line under the columns rather than in the column.
+    static func noticeGoesBelowColumns(_ text: String, resetsSlot: Int) -> Bool {
+        !ResetCreditsColumn.noticeFitsOnOneLine(text, span: PopupMetrics.lineRemainder(fromSlot: resetsSlot))
     }
 
     /// Columns in lines of `PopupMetrics.columnsPerLine`, each the same fixed
@@ -263,8 +316,8 @@ struct AccountRow: View {
         return VStack(alignment: .leading, spacing: PopupMetrics.columnLineSpacing) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .top, spacing: PopupMetrics.columnGap) {
-                    ForEach(line) { column in
-                        view(for: column)
+                    ForEach(Array(line.enumerated()), id: \.element.id) { slot, column in
+                        view(for: column, slot: slot)
                     }
                 }
             }
@@ -272,7 +325,7 @@ struct AccountRow: View {
     }
 
     @ViewBuilder
-    private func view(for column: Column) -> some View {
+    private func view(for column: Column, slot: Int) -> some View {
         switch column {
         case .window(let window):
             WindowBar(
@@ -283,7 +336,16 @@ struct AccountRow: View {
                 now: now
             )
         case .resetCredits(let count):
-            ResetCreditsColumn(count: count, dimmed: dimmed)
+            ResetCreditsColumn(
+                count: count,
+                dimmed: dimmed,
+                displayName: account.displayName,
+                isResetting: isResetting,
+                notice: noticeBelowColumns == nil ? resetNotice : nil,
+                noticeSpan: PopupMetrics.lineRemainder(fromSlot: slot),
+                onUse: actions.useReset,
+                onDismissNotice: actions.dismissResetNotice
+            )
         }
     }
 
@@ -333,6 +395,10 @@ struct AccountRow: View {
         Button("Refresh", action: actions.refresh)
         if case .rateLimited = cached?.status.state {
             Button("Retry status check now", action: actions.retryStatusCheck)
+        }
+        if let count = cached?.status.resetCreditsAvailable {
+            Button("Use reset…", action: actions.useReset)
+                .disabled(isResetting || ResetCreditsColumn.disabledReason(count: count, dimmed: dimmed) != nil)
         }
         Divider()
         Button("Rename…") { beginRename() }

@@ -5,8 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Throttle is a native macOS menu bar app that reads subscription usage limits for
-Claude and Codex accounts and shows them at a glance. It is read-only against
-both providers: it never sends a prompt and never spends quota to learn quota.
+Claude and Codex accounts and shows them at a glance. Polling is read-only
+against both providers: it never sends a prompt and never spends quota to learn
+quota. The one exception is spending a banked limit reset, which happens only
+when the user clicks **Use reset** in the detail window and confirms.
 
 Swift 6 language mode, SwiftUI, `MenuBarExtra`, macOS 14 minimum. Bundle
 identifier `ai.parslee.throttle`, `LSUIElement` true, so there is no Dock icon
@@ -66,6 +68,31 @@ Rules that hold this seam in place:
 - Adding a third provider means a new case on `Provider` and a new file under
   `Providers/`. If it needs anything else, the seam has leaked.
 
+### Banked resets
+
+Spending a banked reset goes through the same seam: `UsageProvider.useReset`,
+whose default means "not supported". The adapter owns the reset endpoint and
+maps the provider's answer onto `ResetOutcome`; the reset paths may appear only
+in each provider's endpoints file and adapter (`ForbiddenEndpointTests`).
+`PollScheduler.useReset` is the only caller, and only the confirmed click in
+the detail window reaches it; no poll, timer, wake, or launch does.
+
+- **Idempotency key.** Every attempt carries an `attemptID`. A resend after a
+  forced refresh, and a user retry after a couldn't-reach result, reuse it, so a
+  reset that went through is never spent twice.
+- **One reset per account at a time.** A second attempt while one runs sends
+  nothing. Each send is bounded by `PollScheduler.resetTimeout`.
+- **Auth.** The credential comes from the poller's resolver. A 401 forces one
+  serialized refresh and one resend; a second 401 flips the account to
+  `needsLogin` and keeps the row. A 429 on the reset never moves the poll
+  backoff.
+- **The re-read.** After a spend, or an answer that means the count is out of
+  date, the scheduler reads that one account's usage once, through the normal
+  fetch path, and only when neither the account nor its provider is under a
+  backoff horizon. Otherwise the row keeps its last good reading with its age.
+  The numbers shown are always the provider's; nothing subtracts a credit
+  locally.
+
 ## Token handling
 
 Tokens are the part of this app that can hurt a user, so the rules are strict.
@@ -88,7 +115,11 @@ Tokens are the part of this app that can hurt a user, so the rules are strict.
 - **A failed refresh flips the account to `needsLogin` and keeps the row.** It
   never deletes the account and never shows stale numbers as if they were live.
 - **Everything user-visible passes through `Redactor`.** Error strings can echo
-  a request, and a request carries a bearer token.
+  a request, and a request carries a bearer token. Reset messages are also
+  flattened to one line and capped at 300 characters.
+- **Reset ids stay out of storage.** A reset's attempt id, grant id, credit id
+  or organization id never goes in `accounts.json`, UserDefaults, the status
+  cache, or a log line.
 
 ## Polling cadence
 
@@ -102,6 +133,10 @@ running is skipped, not queued.
 
 The menu bar rotation timer reads cached data only. It must never trigger a
 network request, and a test asserts that.
+
+Polling only reads. No poll cycle, timer tick, wake, launch, or Refresh ever
+spends a reset; a reset is spent only on an explicit, confirmed click, and its
+one follow-up read honors the same backoff horizons as a cycle.
 
 ## Repo hygiene
 
