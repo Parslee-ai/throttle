@@ -69,7 +69,7 @@ struct DetailWindow: View {
             ResetConfirmation(
                 displayName: account.displayName,
                 count: cached?.status.resetCreditsAvailable ?? 0,
-                windows: Formatting.popupOrder(Formatting.windows(of: cached)),
+                windows: Formatting.windowOrder(Formatting.windows(of: cached)),
                 onConfirm: {
                     pendingReset = nil
                     model.useReset(account)

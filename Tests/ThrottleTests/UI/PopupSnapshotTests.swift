@@ -124,6 +124,24 @@ final class PopupSnapshotTests: XCTestCase {
 
     // MARK: Tests
 
+    /// A Claude row (5h, 7d, Fable) above a Codex row (5h, 7d), so the
+    /// "7-day limit" column can be compared directly (ISC-364).
+    func testClaudeAboveCodexWithSessionWindowsRendersInDarkAndLight() throws {
+        var fixture = Fixture()
+        let day: TimeInterval = 86_400
+        fixture.add("claude-dev@example.com", provider: .anthropic, plan: "max",
+                    windows: claudeWindows(fable: 40, session: 20, weekly: 30, resetsIn: 3 * day))
+        fixture.add("codex-main@example.com", provider: .openai, plan: "pro",
+                    windows: [
+                        UIFixtures.window("5h", label: "5h", used: 25, resetsIn: 3 * 3600, seconds: 18_000),
+                        UIFixtures.window("7d", label: "Weekly", used: 45, resetsIn: 3 * day, seconds: 604_800),
+                    ], resetCredits: 1)
+        for appearance in Self.appearances {
+            let image = try render(panel(for: fixture), appearance: appearance.value)
+            try check(image, named: "popup-claude-above-codex-\(appearance.name)")
+        }
+    }
+
     func testPopupRendersInDarkAndLight() throws {
         let fixture = referenceFixture()
         for appearance in Self.appearances {
@@ -221,7 +239,7 @@ final class PopupSnapshotTests: XCTestCase {
             ResetConfirmation(
                 displayName: account.displayName,
                 count: cached?.status.resetCreditsAvailable ?? 0,
-                windows: Formatting.popupOrder(Formatting.windows(of: cached)),
+                windows: Formatting.windowOrder(Formatting.windows(of: cached)),
                 onConfirm: {},
                 onCancel: {}
             )
@@ -355,8 +373,15 @@ final class PopupSnapshotTests: XCTestCase {
         XCTAssertGreaterThan(start.redComponent, 0.8, "12% left draws the yellow fill")
         XCTAssertGreaterThan(start.greenComponent, 0.6)
         XCTAssertLessThan(start.blueComponent, 0.35)
-        XCTAssertGreaterThan(redStart.redComponent, 2 * redStart.greenComponent, "an empty window's track reads red")
-        XCTAssertGreaterThan(redStart.redComponent, 2 * redStart.blueComponent)
+        let bar = UsageBar(fraction: 0, band: .normal, dimmed: false, width: PopupMetrics.columnWidth)
+            .padding(4)
+            .background(Colors.windowBackground)
+        let rep = try render(bar, appearance: appearance)
+        let scale = CGFloat(rep.pixelsWide) / (PopupMetrics.columnWidth + 8)
+        let neutral = try XCTUnwrap(rep.colorAt(x: Int(6 * scale), y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(redStart.redComponent, neutral.redComponent, accuracy: 0.02, "an empty window's track is the neutral track")
+        XCTAssertEqual(redStart.greenComponent, neutral.greenComponent, accuracy: 0.02)
+        XCTAssertEqual(redStart.blueComponent, neutral.blueComponent, accuracy: 0.02)
         XCTAssertLessThan(end.redComponent, 0.3, "100% left draws the green fill")
         XCTAssertGreaterThan(end.greenComponent, 0.55)
     }

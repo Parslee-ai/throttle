@@ -18,8 +18,6 @@ enum Swatch: CaseIterable, Sendable {
     case red
     case windowBackground
     case track
-    /// The track of an empty bar: the whole bar reads red.
-    case criticalTrack
     case divider
     /// The quietest text: reset timestamps, "No reset pending", data age.
     case quietText
@@ -32,7 +30,6 @@ enum Swatch: CaseIterable, Sendable {
         case .red: return 0xEF4444
         case .windowBackground: return 0x191817
         case .track: return 0x2E2D2B
-        case .criticalTrack: return 0x7A2B2A
         case .divider: return 0x2A2927
         case .quietText: return 0x7F7E7C
         }
@@ -46,7 +43,6 @@ enum Swatch: CaseIterable, Sendable {
         case .red: return 0xD0312D
         case .windowBackground: return 0xFAFAF9
         case .track: return 0xE4E3E0
-        case .criticalTrack: return 0xDF7774
         case .divider: return 0xE7E6E3
         case .quietText: return 0x737270
         }
@@ -94,8 +90,6 @@ struct BandInk: Hashable, Sendable {
         case green
         case yellow
         case red
-        /// The track of an empty bar (`Swatch.criticalTrack`).
-        case criticalTrack
         /// The neutral track (`Swatch.track`).
         case track
         /// Dimmed text: the secondary label color.
@@ -106,7 +100,7 @@ struct BandInk: Hashable, Sendable {
     let opacity: Double
 
     /// True when the part reads red.
-    var isRed: Bool { tone == .red || tone == .criticalTrack }
+    var isRed: Bool { tone == .red }
 }
 
 /// Every color the detail window and the menu bar draw with. Text uses the
@@ -136,7 +130,6 @@ enum Colors {
     static let red = Swatch.red.color
     static let windowBackground = Swatch.windowBackground.color
     static let track = Swatch.track.color
-    static let criticalTrack = Swatch.criticalTrack.color
     static let divider = Swatch.divider.color
     static let quietText = Swatch.quietText.color
 
@@ -147,15 +140,17 @@ enum Colors {
     /// whether the reading is dimmed (stale, failed, rate limited, or signed
     /// out).
     ///
-    /// Red is never dimmed, faded, or dropped: a critical percentage, an
-    /// empty bar's track, and a critical bar segment are full-strength red
-    /// whatever else is dimmed, so "0%" is never shown in any other color.
-    /// Everything else fades with the reading.
+    /// Red is never dimmed, faded, or dropped: a critical percentage and a
+    /// critical bar segment are full-strength red whatever else is dimmed, so
+    /// "0%" is never shown in any other color. An empty bar's track is the
+    /// plain neutral track like every other bar's (the fill is invisible at
+    /// zero), so an empty bar reads empty. Everything else fades with the
+    /// reading.
     static func ink(for part: BandedPart, band: UsageBand, dimmed: Bool) -> BandInk {
-        if band == .critical {
-            return BandInk(tone: part == .barTrack ? .criticalTrack : .red, opacity: 1)
-        }
         let fade = dimmed ? dimmedOpacity : 1
+        if band == .critical {
+            return part == .barTrack ? BandInk(tone: .track, opacity: fade) : BandInk(tone: .red, opacity: 1)
+        }
         switch part {
         case .percentText:
             return dimmed ? BandInk(tone: .muted, opacity: fade) : BandInk(tone: tone(for: band), opacity: 1)
@@ -176,7 +171,6 @@ enum Colors {
         case .green: base = green
         case .yellow: base = yellow
         case .red: base = red
-        case .criticalTrack: base = criticalTrack
         case .track: base = track
         case .muted: base = .secondary
         }
@@ -191,7 +185,6 @@ enum Colors {
         case .green: base = Swatch.green.nsColor
         case .yellow: base = Swatch.yellow.nsColor
         case .red: base = Swatch.red.nsColor
-        case .criticalTrack: base = Swatch.criticalTrack.nsColor
         case .track: base = Swatch.track.nsColor
         case .muted: base = .secondaryLabelColor
         }
