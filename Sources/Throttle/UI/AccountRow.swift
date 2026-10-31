@@ -43,7 +43,7 @@ struct AccountRow: View {
     private var windows: [UsageWindow] { Formatting.windows(of: cached) }
 
     /// Secondary lanes are shown in a disclosure after the primary windows (ISC-120).
-    private var primaryWindows: [UsageWindow] { Formatting.popupOrder(windows) }
+    private var primaryWindows: [UsageWindow] { Formatting.windowOrder(windows) }
     private var laneWindows: [UsageWindow] { windows.filter(\.isLane) }
 
     /// Windows dim whenever they are not a current, successful reading.

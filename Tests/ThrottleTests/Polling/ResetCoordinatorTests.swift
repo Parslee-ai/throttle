@@ -143,7 +143,7 @@ final class ResetCoordinatorTests: XCTestCase {
         return ResetConfirmation(
             displayName: account.displayName,
             count: cached?.status.resetCreditsAvailable ?? 0,
-            windows: Formatting.popupOrder(Formatting.windows(of: cached)),
+            windows: Formatting.windowOrder(Formatting.windows(of: cached)),
             onConfirm: {
                 closed()
                 model.useReset(account)

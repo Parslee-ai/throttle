@@ -40,7 +40,7 @@ final class ColorsTests: XCTestCase {
         }
         XCTAssertEqual(Set(colors).count, 3)
         XCTAssertEqual(colors, [Colors.green, Colors.yellow, Colors.red])
-        XCTAssertEqual(Colors.color(for: .barTrack, band: .critical, dimmed: false), Colors.criticalTrack, "an empty bar's track turns red")
+        XCTAssertEqual(Colors.color(for: .barTrack, band: .critical, dimmed: false), Colors.track, "an empty bar's track is the plain neutral track")
         XCTAssertEqual(Colors.color(for: .barTrack, band: .normal, dimmed: false), Colors.track)
         XCTAssertEqual(Colors.color(for: .barTrack, band: .warning, dimmed: false), Colors.track)
     }
@@ -48,21 +48,21 @@ final class ColorsTests: XCTestCase {
     // MARK: Dimming never touches red
 
     /// "0%" is never shown in anything but red: whether or not the reading
-    /// is dimmed, a critical band draws the popup percentage, the bar track,
-    /// and the menu bar segment in full-strength red.
+    /// is dimmed, a critical band draws the popup percentage and the menu bar
+    /// segment in full-strength red. The bar track is the neutral track.
     func testCriticalIsFullStrengthRedWhetherDimmedOrNot() {
         for dimmed in [false, true] {
-            for part in BandedPart.allCases {
+            for part in BandedPart.allCases where part != .barTrack {
                 let ink = Colors.ink(for: part, band: .critical, dimmed: dimmed)
                 XCTAssertTrue(ink.isRed, "\(part) dimmed=\(dimmed)")
                 XCTAssertEqual(ink.opacity, 1, "\(part) dimmed=\(dimmed) must not fade")
             }
             XCTAssertEqual(Colors.ink(for: .percentText, band: .critical, dimmed: dimmed), BandInk(tone: .red, opacity: 1))
             XCTAssertEqual(Colors.ink(for: .barSegment, band: .critical, dimmed: dimmed), BandInk(tone: .red, opacity: 1))
-            XCTAssertEqual(Colors.ink(for: .barTrack, band: .critical, dimmed: dimmed), BandInk(tone: .criticalTrack, opacity: 1))
+            XCTAssertEqual(Colors.ink(for: .barTrack, band: .critical, dimmed: dimmed), BandInk(tone: .track, opacity: dimmed ? Colors.dimmedOpacity : 1), "an empty bar reads empty: neutral track, no red tint")
             XCTAssertEqual(Colors.color(for: .percentText, band: .critical, dimmed: dimmed), Colors.red)
             XCTAssertEqual(Colors.color(for: .barSegment, band: .critical, dimmed: dimmed), Colors.red)
-            XCTAssertEqual(Colors.color(for: .barTrack, band: .critical, dimmed: dimmed), Colors.criticalTrack)
+            XCTAssertEqual(Colors.color(for: .barTrack, band: .critical, dimmed: dimmed), dimmed ? Colors.track.opacity(Colors.dimmedOpacity) : Colors.track)
         }
     }
 
@@ -92,17 +92,6 @@ final class ColorsTests: XCTestCase {
                 XCTAssertEqual(Colors.ink(for: .barSegment, band: band, dimmed: dimmed).isRed, remaining == 0, "\(remaining)% dimmed=\(dimmed)")
             }
         }
-    }
-
-    /// The red track of an empty bar must read red on the light background,
-    /// not as a faint pink.
-    func testCriticalTrackReadsRedInLightMode() throws {
-        let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        let value = hex(Swatch.criticalTrack.nsColor, in: light)
-        let red = Int(value >> 16 & 0xFF), green = Int(value >> 8 & 0xFF), blue = Int(value & 0xFF)
-        XCTAssertGreaterThanOrEqual(red - green, 90, String(format: "#%06X", value))
-        XCTAssertGreaterThanOrEqual(red - blue, 90, String(format: "#%06X", value))
-        XCTAssertLessThan(green, 0xA0, "dark enough to read as red, not pink")
     }
 
     /// Quiet text is body-size, so it keeps 4.5:1 against the light background
@@ -140,7 +129,6 @@ final class ColorsTests: XCTestCase {
             .red: (0xEF4444, 0xD0312D),
             .windowBackground: (0x191817, 0xFAFAF9),
             .track: (0x2E2D2B, 0xE4E3E0),
-            .criticalTrack: (0x7A2B2A, 0xDF7774),
             .divider: (0x2A2927, 0xE7E6E3),
             .quietText: (0x7F7E7C, 0x737270),
         ]

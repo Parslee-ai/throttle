@@ -19,4 +19,5 @@ xcuserdata/
 
 # Local agent + planning artifacts, not part of the public project
 ISA.md
+ISA.html
 .claude/settings.local.json

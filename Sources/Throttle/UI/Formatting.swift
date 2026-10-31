@@ -135,16 +135,10 @@ enum Formatting {
         return cached.status.windows.isEmpty ? (cached.lastGoodWindows ?? []) : cached.status.windows
     }
 
-    /// Popup column order: model-scoped windows, then the session (shortest)
-    /// window, then the weekly window, then anything else. Lanes excluded.
-    static func popupOrder(_ windows: [UsageWindow]) -> [UsageWindow] {
-        let groups = grouped(windows)
-        return groups.scoped + groups.session + groups.weekly + groups.others
-    }
-
-    /// Menu bar order: session, weekly, anything else, then model-scoped.
-    /// Lanes never reach the bar (ISC-73).
-    static func barOrder(_ windows: [UsageWindow]) -> [UsageWindow] {
+    /// The one window order, for the popup, the reset confirmation, and the
+    /// menu bar: session (shortest) window, weekly window, anything else, then
+    /// model-scoped windows. Lanes never reach any of them (ISC-73).
+    static func windowOrder(_ windows: [UsageWindow]) -> [UsageWindow] {
         let groups = grouped(windows)
         return groups.session + groups.weekly + groups.others + groups.scoped
     }
@@ -168,8 +162,8 @@ enum Formatting {
 
     // MARK: Times
 
-    /// The reset line for a window (ISC-118): the largest whole unit to go,
-    /// then a local month/day and 24-hour stamp.
+    /// The reset line for a window (ISC-118, ISC-369): a humanized, rounded
+    /// phrase (`in about 3 days`), then a local month/day and 24-hour stamp.
     static func resetText(
         resetsAt: Date?,
         now: Date,
@@ -190,20 +184,77 @@ enum Formatting {
         )
     }
 
-    /// `in 5 days`, `in 1 hour`, `in 12 minutes`: the largest whole unit only.
-    /// Minutes round up, so a reset 30 seconds away says `in 1 minute`.
+    /// How a reset phrase qualifies its quantity.
+    enum ResetQualifier: String, Sendable {
+        case none = ""
+        case justUnder = "just under "
+        case justOver = "just over "
+        case about = "about "
+    }
+
+    /// A relative reset phrase with the numbers behind it, so tests can check
+    /// the phrase against the true time.
+    struct ResetPhrase: Sendable {
+        let text: String
+        /// The quantity the phrase states, in seconds.
+        let statedSeconds: TimeInterval
+        /// The rounding step of the unit stated (1 hour, half a day), or nil
+        /// for minutes, which round up instead.
+        let stepSeconds: TimeInterval?
+        let qualifier: ResetQualifier
+    }
+
+    /// `in 12 minutes`, `in 20 hours`, `in 2½ days`, `in just under 3 days`.
+    /// Minutes round up; hours round to the nearest hour; from one day on the
+    /// quantity moves in half-day steps (halves round up). A quantity that
+    /// rounds into the next unit is said in that unit.
     static func relativeReset(_ interval: TimeInterval) -> String {
-        if interval <= 0 { return "resetting now" }
-        if interval >= 86_400 {
-            let days = Int(interval / 86_400)
-            return days == 1 ? "in 1 day" : "in \(days) days"
+        resetPhrase(interval).text
+    }
+
+    static func resetPhrase(_ interval: TimeInterval) -> ResetPhrase {
+        if interval <= 0 {
+            return ResetPhrase(text: "resetting now", statedSeconds: 0, stepSeconds: nil, qualifier: .none)
         }
-        if interval >= 3600 {
-            let hours = Int(interval / 3600)
-            return hours == 1 ? "in 1 hour" : "in \(hours) hours"
+        let hour: TimeInterval = 3600, day: TimeInterval = 86_400
+        if interval < hour {
+            let minutes = max(1, Int((interval / 60).rounded(.up)))
+            if minutes < 60 {
+                return ResetPhrase(
+                    text: minutes == 1 ? "in 1 minute" : "in \(minutes) minutes",
+                    statedSeconds: TimeInterval(minutes) * 60, stepSeconds: nil, qualifier: .none
+                )
+            }
+            // Rounds up to 60 minutes: say it in hours.
         }
-        let minutes = max(1, Int((interval / 60).rounded(.up)))
-        return minutes == 1 ? "in 1 minute" : "in \(minutes) minutes"
+        let step: TimeInterval
+        let stated: TimeInterval
+        let name: String
+        if interval < day - hour / 2 {
+            let hours = max(1, Int((interval / hour + 0.5).rounded(.down)))
+            step = hour
+            stated = TimeInterval(hours) * hour
+            name = hours == 1 ? "1 hour" : "\(hours) hours"
+        } else {
+            let halves = max(2, Int((interval / (day / 2) + 0.5).rounded(.down)))
+            step = day / 2
+            stated = TimeInterval(halves) * step
+            if halves % 2 == 0 {
+                name = halves == 2 ? "1 day" : "\(halves / 2) days"
+            } else {
+                name = "\(halves / 2)½ days"
+            }
+        }
+        let diff = interval - stated
+        let qualifier: ResetQualifier
+        if abs(diff) <= 60 {
+            qualifier = .none
+        } else if abs(diff) <= step / 4 {
+            qualifier = diff < 0 ? .justUnder : .justOver
+        } else {
+            qualifier = .about
+        }
+        return ResetPhrase(text: "in " + qualifier.rawValue + name, statedSeconds: stated, stepSeconds: step, qualifier: qualifier)
     }
 
     /// Month, day, and 24-hour time in the user's locale; `09/27, 12:59` in
@@ -325,7 +376,7 @@ enum Formatting {
             break
         }
 
-        let windows = barOrder(windows(of: cached))
+        let windows = windowOrder(windows(of: cached))
         let dimmed = cached.isStale
         if windows.isEmpty {
             if case .error = cached.status.state {

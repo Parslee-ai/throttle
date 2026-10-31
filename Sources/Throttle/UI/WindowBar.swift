@@ -7,7 +7,8 @@ import SwiftUI
 /// The percentage, the bar fill, and the track all take their color from the
 /// one band rule applied to the same rounded number the text shows, drawn
 /// through `Colors.ink`. A dimmed reading fades its title, reset line, and
-/// non-red parts; red stays full strength, so "0%" always reads red.
+/// non-red parts; red text stays full strength, so "0%" always reads red,
+/// while an empty bar's track is the plain neutral track.
 struct WindowBar: View {
     let window: UsageWindow
     let providerName: String

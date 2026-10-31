@@ -76,7 +76,7 @@ final class FormattingTests: XCTestCase {
 
     // MARK: Window order
 
-    func testPopupOrderIsScopedThenSessionThenWeeklyThenTheRest() {
+    func testWindowOrderIsSessionThenWeeklyThenTheRestThenScoped() {
         let windows = [
             UIFixtures.window("5h", label: "5h", used: 0, seconds: 18_000),
             UIFixtures.window("7d", label: "Weekly", used: 0, seconds: 604_800),
@@ -84,36 +84,99 @@ final class FormattingTests: XCTestCase {
             UIFixtures.window("scoped:Fable", label: "Fable", used: 0),
             UIFixtures.window("lane:spark-5h", label: "Spark 5h", used: 0, seconds: 18_000),
         ]
-        XCTAssertEqual(Formatting.popupOrder(windows).map(\.key), ["scoped:Fable", "5h", "7d", "30d"])
-        XCTAssertEqual(Formatting.barOrder(windows).map(\.key), ["5h", "7d", "30d", "scoped:Fable"])
+        XCTAssertEqual(Formatting.windowOrder(windows).map(\.key), ["5h", "7d", "30d", "scoped:Fable"])
     }
 
     func testOrderWithAWeeklyWindowOnly() {
         let windows = [UIFixtures.window("7d", label: "Weekly", used: 0, seconds: 604_800)]
-        XCTAssertEqual(Formatting.popupOrder(windows).map(\.key), ["7d"])
-        XCTAssertEqual(Formatting.barOrder(windows).map(\.key), ["7d"])
+        XCTAssertEqual(Formatting.windowOrder(windows).map(\.key), ["7d"])
     }
 
     // MARK: Reset line
 
-    func testResetUsesTheLargestWholeUnitThenAStamp() {
+    func testResetIsAHumanizedPhraseThenAStamp() {
         let fiveDays = now.addingTimeInterval(5 * 86_400 + 3 * 3600)
         let reset = Formatting.resetText(resetsAt: fiveDays, now: now, calendar: utc, locale: enUS)
-        XCTAssertEqual(reset.relative, "in 5 days")
+        XCTAssertEqual(reset.relative, "in just over 5 days")
         XCTAssertEqual(reset.stamp, Formatting.resetStamp(fiveDays, calendar: utc, locale: enUS))
-        XCTAssertEqual(reset.line, "in 5 days · " + reset.stamp!)
+        XCTAssertEqual(reset.line, "in just over 5 days · " + reset.stamp!)
         XCTAssertTrue(reset.isScheduled)
     }
 
     func testRelativeResetUnits() {
+        let h: TimeInterval = 3600
         XCTAssertEqual(Formatting.relativeReset(86_400), "in 1 day")
-        XCTAssertEqual(Formatting.relativeReset(2 * 86_400 - 1), "in 1 day")
-        XCTAssertEqual(Formatting.relativeReset(10 * 3600 + 59 * 60), "in 10 hours")
+        XCTAssertEqual(Formatting.relativeReset(2 * 86_400 - 1), "in 2 days")
+        XCTAssertEqual(Formatting.relativeReset(10 * h + 59 * 60), "in 11 hours")
         XCTAssertEqual(Formatting.relativeReset(3600), "in 1 hour")
-        XCTAssertEqual(Formatting.relativeReset(3599), "in 60 minutes")
+        XCTAssertEqual(Formatting.relativeReset(3599), "in 1 hour")
+        XCTAssertEqual(Formatting.relativeReset(59 * 60), "in 59 minutes")
+        XCTAssertEqual(Formatting.relativeReset(23.6 * h), "in just under 1 day")
+        XCTAssertEqual(Formatting.relativeReset(70 * h), "in just under 3 days")
+        XCTAssertEqual(Formatting.relativeReset(60 * h), "in 2½ days")
+        XCTAssertEqual(Formatting.relativeReset(66 * h), "in about 3 days")
+        XCTAssertEqual(Formatting.relativeReset(26 * h), "in just over 1 day")
+        XCTAssertEqual(Formatting.relativeReset(36 * h), "in 1½ days")
+        XCTAssertEqual(Formatting.relativeReset(72 * h), "in 3 days")
+        XCTAssertEqual(Formatting.relativeReset(19 * h + 40 * 60), "in about 20 hours")
+        XCTAssertEqual(Formatting.relativeReset(20 * h), "in 20 hours")
         XCTAssertEqual(Formatting.relativeReset(12 * 60), "in 12 minutes")
         XCTAssertEqual(Formatting.relativeReset(30), "in 1 minute")
         XCTAssertEqual(Formatting.relativeReset(61), "in 2 minutes")
+    }
+
+    /// Every minute from 1 minute to 8 days. Reads only the words the user
+    /// sees: parses qualifier, number (with ½) and unit out of the phrase,
+    /// recomputes the stated time from them, and checks it against the truth.
+    func testRelativeResetSweepEveryMinute() throws {
+        let qualifiers = ["just under ", "just over ", "about ", ""]
+        for minute in 1...(8 * 24 * 60) {
+            let truth = TimeInterval(minute * 60)
+            let text = Formatting.relativeReset(truth)
+            let label = "\(minute) min: \(text)"
+            var rest = Substring(text)
+            XCTAssertTrue(rest.hasPrefix("in "), label)
+            rest = rest.dropFirst(3)
+            let qualifier = qualifiers.first { !$0.isEmpty && rest.hasPrefix($0) } ?? ""
+            rest = rest.dropFirst(qualifier.count)
+            let parts = rest.split(separator: " ")
+            XCTAssertEqual(parts.count, 2, label)
+            guard parts.count == 2 else { continue }
+            var numberText = String(parts[0])
+            let hasHalf = numberText.hasSuffix("½")
+            if hasHalf { numberText.removeLast() }
+            let whole = try XCTUnwrap(Int(numberText), label)
+            let quantity = Double(whole) + (hasHalf ? 0.5 : 0)
+            let unit = String(parts[1])
+            let singular = quantity == 1
+            let unitSeconds: TimeInterval
+            let step: TimeInterval?
+            switch unit {
+            case singular ? "minute" : "minutes": unitSeconds = 60; step = nil
+            case singular ? "hour" : "hours": unitSeconds = 3600; step = 3600
+            case singular ? "day" : "days": unitSeconds = 86_400; step = 43_200
+            default:
+                XCTFail("bad unit or plural: \(label)")
+                continue
+            }
+            if hasHalf { XCTAssertEqual(unit, "days", label) }
+            let stated = quantity * unitSeconds
+            let diff = truth - stated
+            guard let step else {
+                XCTAssertEqual(qualifier, "", label)
+                XCTAssertGreaterThanOrEqual(stated, truth, label)
+                XCTAssertLessThan(stated - truth, 60, label)
+                continue
+            }
+            XCTAssertLessThanOrEqual(abs(diff), step / 2, label)
+            if abs(diff) <= 60 {
+                XCTAssertEqual(qualifier, "", label)
+            } else if abs(diff) <= step / 4 {
+                XCTAssertEqual(qualifier, diff < 0 ? "just under " : "just over ", label)
+            } else {
+                XCTAssertEqual(qualifier, "about ", label)
+            }
+        }
     }
 
     func testResetStampIsMonthDayAnd24HourTime() {
