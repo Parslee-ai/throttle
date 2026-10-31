@@ -100,11 +100,14 @@ enum RepoAudit {
             .map { SourceLine(file: relative, number: $0.offset + 1, text: $0.element) }
     }
 
+    /// Both sides are resolved first: `#filePath` keeps a symlinked checkout
+    /// root such as `/tmp`, while the enumerator returns `/private/tmp`.
     static func relativePath(of file: URL) -> String {
-        let prefix = root.path + "/"
-        return file.path.hasPrefix(prefix)
-            ? String(file.path.dropFirst(prefix.count))
-            : file.path
+        let prefix = root.resolvingSymlinksInPath().path + "/"
+        let path = file.resolvingSymlinksInPath().path
+        return path.hasPrefix(prefix)
+            ? String(path.dropFirst(prefix.count))
+            : path
     }
 
     /// Renders offenders one per line so a failure names every file:line at once
