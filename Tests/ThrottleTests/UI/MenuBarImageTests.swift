@@ -16,9 +16,9 @@ final class MenuBarImageTests: XCTestCase {
 
     private var mixed: [UsageWindow] {
         [
-            UIFixtures.window("5h", label: "5h", used: 0),
-            UIFixtures.window("7d", label: "Weekly", used: 85),
-            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 100),
+            UIFixtures.window("7d", label: "Weekly", used: 0),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 85),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 100),
         ]
     }
 
@@ -26,19 +26,19 @@ final class MenuBarImageTests: XCTestCase {
 
     func testRunsAndColors() throws {
         let text = MenuBarImage.attributedText(for: label(mixed))
-        XCTAssertEqual(text.string, "1: 5h 100% / WK 15% / FB 0%")
+        XCTAssertEqual(text.string, "1: WK 100% / FB 15% / OP 0%")
 
         XCTAssertEqual(try color(of: "1: ", in: text), NSColor.labelColor)
         XCTAssertEqual(try color(of: " / ", in: text), NSColor.labelColor)
 
         let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
         let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        XCTAssertEqual(hex(try color(of: "5h 100%", in: text), in: dark), 0x25B07F)
-        XCTAssertEqual(hex(try color(of: "5h 100%", in: text), in: light), 0x1C9468)
-        XCTAssertEqual(hex(try color(of: "WK 15%", in: text), in: dark), 0xE8B931)
-        XCTAssertEqual(hex(try color(of: "WK 15%", in: text), in: light), 0xB98A00)
-        XCTAssertEqual(hex(try color(of: "FB 0%", in: text), in: dark), 0xEF4444)
-        XCTAssertEqual(hex(try color(of: "FB 0%", in: text), in: light), 0xD0312D)
+        XCTAssertEqual(hex(try color(of: "WK 100%", in: text), in: dark), 0x25B07F)
+        XCTAssertEqual(hex(try color(of: "WK 100%", in: text), in: light), 0x1C9468)
+        XCTAssertEqual(hex(try color(of: "FB 15%", in: text), in: dark), 0xE8B931)
+        XCTAssertEqual(hex(try color(of: "FB 15%", in: text), in: light), 0xB98A00)
+        XCTAssertEqual(hex(try color(of: "OP 0%", in: text), in: dark), 0xEF4444)
+        XCTAssertEqual(hex(try color(of: "OP 0%", in: text), in: light), 0xD0312D)
 
         let font = try XCTUnwrap(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
         XCTAssertEqual(font.pointSize, NSFont.menuBarFont(ofSize: 0).pointSize)
@@ -48,18 +48,18 @@ final class MenuBarImageTests: XCTestCase {
     func testDimmedLabelIsSecondaryButZeroStaysRed() throws {
         let text = MenuBarImage.attributedText(for: label(mixed, isStale: true))
         XCTAssertEqual(try color(of: "1: ", in: text), NSColor.secondaryLabelColor)
-        XCTAssertEqual(try color(of: "5h 100%", in: text), NSColor.secondaryLabelColor)
-        XCTAssertEqual(try color(of: "WK 15%", in: text), NSColor.secondaryLabelColor)
+        XCTAssertEqual(try color(of: "WK 100%", in: text), NSColor.secondaryLabelColor)
+        XCTAssertEqual(try color(of: "FB 15%", in: text), NSColor.secondaryLabelColor)
         let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
         let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        XCTAssertEqual(hex(try color(of: "FB 0%", in: text), in: dark), 0xEF4444)
-        XCTAssertEqual(hex(try color(of: "FB 0%", in: text), in: light), 0xD0312D)
+        XCTAssertEqual(hex(try color(of: "OP 0%", in: text), in: dark), 0xEF4444)
+        XCTAssertEqual(hex(try color(of: "OP 0%", in: text), in: light), 0xD0312D)
     }
 
     func testTruncatedLabelAndEmptyBar() throws {
         let many = mixed + [
-            UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 0),
             UIFixtures.window(UsageWindow.scopedPrefix + "Sonnet", label: "Sonnet", used: 0),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Haiku", label: "Haiku", used: 0),
         ]
         let truncated = label(many, index: 12)
         XCTAssertTrue(truncated.isTruncated)
@@ -87,7 +87,7 @@ final class MenuBarImageTests: XCTestCase {
         let bar = label(mixed)
         let image = MenuBarImage.image(for: bar)
         XCTAssertFalse(image.isTemplate, "a template image would be tinted one color by the menu bar")
-        XCTAssertEqual(image.accessibilityDescription, "1: 5h 100% / WK 15% / FB 0%")
+        XCTAssertEqual(image.accessibilityDescription, "1: WK 100% / FB 15% / OP 0%")
         XCTAssertEqual(image.size.height, MenuBarImage.height)
         XCTAssertGreaterThan(image.size.width, 100)
         XCTAssertLessThan(image.size.width, 320)
@@ -100,8 +100,8 @@ final class MenuBarImageTests: XCTestCase {
         let zero = MenuBarImage.image(for: label([UIFixtures.window("7d", label: "Weekly", used: 100)]))
         let staleZero = MenuBarImage.image(for: label([UIFixtures.window("7d", label: "Weekly", used: 100)], isStale: true))
         let green = MenuBarImage.image(for: label([
-            UIFixtures.window("5h", label: "5h", used: 0),
-            UIFixtures.window("7d", label: "Weekly", used: 30),
+            UIFixtures.window("7d", label: "Weekly", used: 0),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 30),
         ]))
         for appearance in [NSAppearance(named: .darkAqua)!, NSAppearance(named: .aqua)!] {
             let name = appearance.name.rawValue
@@ -118,7 +118,7 @@ final class MenuBarImageTests: XCTestCase {
     /// strongest alpha in each region.
     func testGlyphAndTextShareOneOpacity() throws {
         for dimmed in [false, true] {
-            let bar = label([UIFixtures.window("5h", label: "5h", used: 10)], isStale: dimmed)
+            let bar = label([UIFixtures.window("7d", label: "Weekly", used: 10)], isStale: dimmed)
             let image = MenuBarImage.image(for: bar)
             let layout = MenuBarImage.layout(for: bar)
             for appearance in [NSAppearance(named: .darkAqua)!, NSAppearance(named: .aqua)!] {

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The menu bar item's content: one account per rotation tick (ISC-107),
-/// drawn as `<glyph> 1: 5h 100% / WK 89% / FB 79%`.
+/// drawn as `<glyph> 1: WK 89% / FB 79%`.
 ///
 /// The label is a single image (`MenuBarImage`). `MenuBarExtra` maps a
 /// SwiftUI label onto the status button's plain title and template image, so

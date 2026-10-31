@@ -63,7 +63,7 @@ final class RotationControllerTests: XCTestCase {
         let list = accounts(4)
         var statuses: [UUID: CachedStatus] = [:]
         for account in list {
-            statuses[account.id] = UIFixtures.cached(for: account, windows: [UIFixtures.window("5h", label: "5h", used: 50)])
+            statuses[account.id] = UIFixtures.cached(for: account, windows: [UIFixtures.window("7d", label: "Weekly", used: 50)])
         }
         let controller = RotationController(accounts: list, statuses: statuses)
         for _ in 0..<100 {

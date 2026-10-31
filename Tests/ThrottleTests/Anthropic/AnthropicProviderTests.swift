@@ -60,7 +60,7 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(status.email, "user@example.com")
         XCTAssertEqual(status.state, .ok)
         XCTAssertEqual(status.fetchedAt, fixedNow)
-        XCTAssertEqual(status.windows.map(\.key), ["5h", "7d", "scoped:Fable", "scoped:Claude Opus"])
+        XCTAssertEqual(status.windows.map(\.key), ["7d", "scoped:Fable", "scoped:Claude Opus"])
     }
 
     /// ISC-49 through the adapter: a 200 with nothing usable is an error, not `.ok`.
@@ -263,14 +263,14 @@ final class AnthropicProviderTests: XCTestCase {
         // A transport failure: usage is untouched, and the next poll retries.
         let failedInTransport = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(failedInTransport.state, .ok)
-        XCTAssertEqual(failedInTransport.windows.map(\.key), ["5h", "7d", "scoped:Fable", "scoped:Claude Opus"])
+        XCTAssertEqual(failedInTransport.windows.map(\.key), ["7d", "scoped:Fable", "scoped:Claude Opus"])
         XCTAssertNil(failedInTransport.planLabel)
 
         // A 503 with no Retry-After: usage is untouched, and the profile
         // waits an hour.
         let refused = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(refused.state, .ok)
-        XCTAssertEqual(refused.windows.count, 4)
+        XCTAssertEqual(refused.windows.count, 3)
         XCTAssertNil(refused.planLabel)
 
         clock.advance(by: 59 * 60)
@@ -379,7 +379,7 @@ final class AnthropicProviderTests: XCTestCase {
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 1.2 - AnthropicProvider.profileMargin + 0.3)
         XCTAssertEqual(status.state, .ok)
-        XCTAssertEqual(status.windows.count, 4)
+        XCTAssertEqual(status.windows.count, 3)
         XCTAssertNil(status.planLabel)
         XCTAssertEqual(client.profileRequests, 1)
 
@@ -401,7 +401,7 @@ final class AnthropicProviderTests: XCTestCase {
         let status = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the slow profile is cut off at the budget")
         XCTAssertEqual(status.state, .ok)
-        XCTAssertEqual(status.windows.count, 4)
+        XCTAssertEqual(status.windows.count, 3)
         XCTAssertNil(status.planLabel)
 
         client.profileDelay = 0

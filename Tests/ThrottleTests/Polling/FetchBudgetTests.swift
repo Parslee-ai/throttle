@@ -55,7 +55,7 @@ final class FetchBudgetTests: XCTestCase {
 
         let recorded = try XCTUnwrap(entry, "the cycle recorded the account")
         XCTAssertEqual(recorded.status.state, .ok, "not \(recorded.status.state)")
-        XCTAssertEqual(recorded.status.windows.count, 4)
+        XCTAssertEqual(recorded.status.windows.count, 3)
         XCTAssertFalse(recorded.isStale)
         XCTAssertNil(recorded.lastError)
         XCTAssertNil(recorded.status.planLabel, "the plan waits for a poll with time to spare")
