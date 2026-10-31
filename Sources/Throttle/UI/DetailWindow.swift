@@ -23,12 +23,12 @@ struct DetailWindow: View {
             if model.accounts.isEmpty {
                 emptyState
             } else {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
+                LiveClock(every: 30) { now in
                     AccountsPanel(
                         accounts: model.accounts,
                         statuses: model.statuses,
                         planLabels: planLabels,
-                        now: context.date,
+                        now: now,
                         actions: panelActions,
                         resetsInFlight: model.resetsInFlight,
                         resetNotices: model.resetNotices
