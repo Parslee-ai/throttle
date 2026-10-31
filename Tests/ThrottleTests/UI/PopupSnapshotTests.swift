@@ -46,9 +46,8 @@ final class PopupSnapshotTests: XCTestCase {
         }
     }
 
-    private func claudeWindows(fable: Double, session: Double, weekly: Double, resetsIn: TimeInterval?) -> [UsageWindow] {
+    private func claudeWindows(fable: Double, weekly: Double, resetsIn: TimeInterval?) -> [UsageWindow] {
         [
-            UIFixtures.window("5h", label: "5h", used: session, resetsIn: nil, seconds: 18_000),
             UIFixtures.window("7d", label: "Weekly", used: weekly, resetsIn: resetsIn, seconds: 604_800),
             UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: fable, resetsIn: resetsIn, seconds: 604_800),
         ]
@@ -64,21 +63,21 @@ final class PopupSnapshotTests: XCTestCase {
         var fixture = Fixture()
         let day: TimeInterval = 86_400
         fixture.add("claude-dev@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 0, session: 0, weekly: 0, resetsIn: 5 * day + 3600))
+                    windows: claudeWindows(fable: 0, weekly: 0, resetsIn: 5 * day + 3600))
         fixture.add("codex-main@example.com", provider: .openai, plan: "pro",
                     windows: weekly(100, resetsIn: 1 * day + 4 * 3600), resetCredits: 1)
         fixture.add("team.lead@example.com", provider: .anthropic, nickname: "Work (team)", plan: "max",
-                    windows: claudeWindows(fable: 21, session: 0, weekly: 11, resetsIn: 10 * 3600 + 30 * 60))
+                    windows: claudeWindows(fable: 21, weekly: 11, resetsIn: 10 * 3600 + 30 * 60))
         fixture.add("codex-alt@example.com", provider: .openai, plan: "pro",
                     windows: weekly(15, resetsIn: 3 * day + 5 * 3600), resetCredits: 2)
         fixture.add("research@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 85, session: 40, weekly: 60, resetsIn: 1 * day + 2 * 3600))
+                    windows: claudeWindows(fable: 85, weekly: 60, resetsIn: 1 * day + 2 * 3600))
         fixture.add("codex-ci-runner-with-a-long-address@example.com", provider: .openai, plan: "pro",
                     windows: weekly(2, resetsIn: 3 * day + 9 * 3600), resetCredits: 2)
         fixture.add("nightly@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 100, session: 55, weekly: 88, resetsIn: 4 * day + 12 * 3600))
+                    windows: claudeWindows(fable: 100, weekly: 88, resetsIn: 4 * day + 12 * 3600))
         fixture.add("side-project@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 0, session: 0, weekly: 0, resetsIn: nil))
+                    windows: claudeWindows(fable: 0, weekly: 0, resetsIn: nil))
         return fixture
     }
 
@@ -86,18 +85,18 @@ final class PopupSnapshotTests: XCTestCase {
     private func statesFixture() -> Fixture {
         var fixture = Fixture()
         fixture.add("stale@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 30, session: 10, weekly: 20, resetsIn: 2 * 86_400),
+                    windows: claudeWindows(fable: 30, weekly: 20, resetsIn: 2 * 86_400),
                     isStale: true, fetchedAt: now.addingTimeInterval(-12 * 60))
         // Dimmed with a window at 0%: the 0% must still read red.
         fixture.add("stale-empty@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 100, session: 85, weekly: 40, resetsIn: 3 * 86_400),
+                    windows: claudeWindows(fable: 100, weekly: 40, resetsIn: 3 * 86_400),
                     isStale: true, fetchedAt: now.addingTimeInterval(-15 * 60))
         fixture.add("signed-out@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 30, session: 10, weekly: 20, resetsIn: 86_400), state: .needsLogin)
+                    windows: claudeWindows(fable: 30, weekly: 20, resetsIn: 86_400), state: .needsLogin)
         fixture.add("console@example.com", provider: .anthropic, plan: nil,
                     windows: [], state: .forbidden("OAuth authentication is currently not allowed for this organization."))
         fixture.add("throttled@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 5, session: 5, weekly: 5, resetsIn: 3 * 86_400),
+                    windows: claudeWindows(fable: 5, weekly: 5, resetsIn: 3 * 86_400),
                     state: .rateLimited(until: now.addingTimeInterval(3600)))
         fixture.add("broken@example.com", provider: .openai, plan: "pro", windows: [], state: .error("The request timed out."))
         fixture.add("errored-empty@example.com", provider: .openai, plan: "pro",
@@ -110,7 +109,7 @@ final class PopupSnapshotTests: XCTestCase {
     private func wrapFixture() -> Fixture {
         var fixture = Fixture()
         fixture.add("many-windows@example.com", provider: .anthropic, plan: "max_20x",
-                    windows: claudeWindows(fable: 50, session: 20, weekly: 99.6, resetsIn: 6 * 86_400)
+                    windows: claudeWindows(fable: 50, weekly: 99.6, resetsIn: 6 * 86_400)
                         + [UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 81, resetsIn: 6 * 86_400, seconds: 604_800)])
         fixture.add("lanes@example.com", provider: .openai, plan: "pro",
                     windows: [
@@ -124,21 +123,76 @@ final class PopupSnapshotTests: XCTestCase {
 
     // MARK: Tests
 
-    /// A Claude row (5h, 7d, Fable) above a Codex row (5h, 7d), so the
-    /// "7-day limit" column can be compared directly (ISC-364).
-    func testClaudeAboveCodexWithSessionWindowsRendersInDarkAndLight() throws {
+    /// A Claude row (7d, Fable) above a Codex row (7d and a reset count), so
+    /// the "7-day limit" column can be compared directly (ISC-364). Both start
+    /// in the first column now that neither provider reports a 5-hour window.
+    func testClaudeAboveCodexRendersInDarkAndLight() throws {
         var fixture = Fixture()
         let day: TimeInterval = 86_400
         fixture.add("claude-dev@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 40, session: 20, weekly: 30, resetsIn: 3 * day))
+                    windows: claudeWindows(fable: 40, weekly: 30, resetsIn: 3 * day))
         fixture.add("codex-main@example.com", provider: .openai, plan: "pro",
-                    windows: [
-                        UIFixtures.window("5h", label: "5h", used: 25, resetsIn: 3 * 3600, seconds: 18_000),
-                        UIFixtures.window("7d", label: "Weekly", used: 45, resetsIn: 3 * day, seconds: 604_800),
-                    ], resetCredits: 1)
+                    windows: weekly(45, resetsIn: 3 * day), resetCredits: 1)
         for appearance in Self.appearances {
             let image = try render(panel(for: fixture), appearance: appearance.value)
             try check(image, named: "popup-claude-above-codex-\(appearance.name)")
+        }
+    }
+
+    /// The live shapes end to end: the session-carrying Claude payloads through
+    /// the real Anthropic parser above a weekly-only Codex payload with a reset
+    /// count through the real OpenAI parser. Claude has no 5h window, and the
+    /// first window column starts at the same x in both rows.
+    func testParsedClaudeAboveParsedCodexShareTheFirstColumn() throws {
+        let codexPayload = """
+        {"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":45,"limit_window_seconds":604800,\
+        "reset_at":\(Int(now.timeIntervalSince1970) + 3 * 86_400)},"secondary_window":null},\
+        "rate_limit_reset_credits":{"available_count":1}}
+        """
+        let codex = try OpenAIUsageParser.parse(Data(codexPayload.utf8), now: now)
+        XCTAssertEqual(codex.windows.map(\.key), ["7d"])
+        XCTAssertEqual(codex.resetCreditsAvailable, 1)
+
+        for (name, fixtureName, keys) in [
+            ("inactive", "anthropic-inactive", ["7d", "scoped:Fable"]),
+            ("limits", "anthropic-limits", ["7d", "scoped:Fable", "scoped:Claude Opus"]),
+        ] {
+            let claude = try AnthropicUsageParser.parse(AnthropicFixtures.data(fixtureName))
+            XCTAssertEqual(claude.map(\.key), keys, fixtureName)
+            XCTAssertFalse(claude.contains { $0.key == "5h" || $0.durationSeconds == 18_000 }, fixtureName)
+
+            var fixture = Fixture()
+            fixture.add("claude-dev@example.com", provider: .anthropic, plan: "max", windows: claude)
+            fixture.add("codex-main@example.com", provider: .openai, plan: "pro",
+                        windows: codex.windows, resetCredits: codex.resetCreditsAvailable)
+            for appearance in Self.appearances {
+                let image = try render(panel(for: fixture), appearance: appearance.value)
+                try check(image, named: "popup-parsed-claude-\(name)-above-parsed-codex-\(appearance.name)")
+
+                var firstInk: [Int] = []
+                for account in fixture.accounts {
+                    let row = try render(singleRow(account, cached: fixture.statuses[account.id], notice: nil, now: now),
+                                         appearance: appearance.value)
+                    let scale = CGFloat(row.pixelsWide) / PopupMetrics.width
+                    let background = try XCTUnwrap(row.colorAt(x: row.pixelsWide - 1, y: 0)?.usingColorSpace(.sRGB))
+                    let start = Int(((PopupMetrics.columnsLeading - 4) * scale).rounded(.down))
+                    var found: Int?
+                    scan: for x in start..<row.pixelsWide {
+                        for y in 0..<row.pixelsHigh {
+                            guard let c = row.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            let delta = abs(c.redComponent - background.redComponent) + abs(c.greenComponent - background.greenComponent)
+                                + abs(c.blueComponent - background.blueComponent)
+                            if delta > 0.3 { found = x; break scan }
+                        }
+                    }
+                    let x = try XCTUnwrap(found, "\(account.email) draws a first column")
+                    XCTAssertEqual(Double(x), Double(PopupMetrics.columnsLeading * scale), accuracy: 2,
+                                   "\(account.email) first column starts at columnsLeading (\(appearance.name))")
+                    firstInk.append(x)
+                }
+                XCTAssertEqual(firstInk.count, 2)
+                XCTAssertEqual(firstInk[0], firstInk[1], "both rows start the first column at the same x (\(name), \(appearance.name))")
+            }
         }
     }
 
@@ -190,7 +244,7 @@ final class PopupSnapshotTests: XCTestCase {
     func testResetNoticesRenderInDarkAndLight() throws {
         var fixture = Fixture()
         fixture.add("done@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 0, session: 0, weekly: 0, resetsIn: 7 * 86_400), resetCredits: 1)
+                    windows: claudeWindows(fable: 0, weekly: 0, resetsIn: 7 * 86_400), resetCredits: 1)
         fixture.add("failed@example.com", provider: .openai, plan: "pro",
                     windows: weekly(88, resetsIn: 86_400), resetCredits: 1)
         fixture.add("nothing@example.com", provider: .openai, plan: "pro",
@@ -213,8 +267,8 @@ final class PopupSnapshotTests: XCTestCase {
             displayName: "work@example.com",
             count: 2,
             windows: [
-                UIFixtures.window("5h", label: "5h", used: 70, seconds: 18_000),
                 UIFixtures.window("7d", label: "Weekly", used: 10),
+                UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 70),
             ],
             onConfirm: {},
             onCancel: {}
@@ -429,16 +483,16 @@ final class PopupSnapshotTests: XCTestCase {
         }
     }
 
-    /// A reset that clears only the 5-hour window: the weekly column is
-    /// pixel-identical before and after.
+    /// A reset that clears only a 5-hour window (a provider may report one):
+    /// the weekly column is pixel-identical before and after.
     func testResetSuccessFiveHourOnlyRenders() throws {
-        let account = UIFixtures.account("five-hour@example.com", provider: .anthropic)
+        let account = UIFixtures.account("five-hour@example.com", provider: .openai)
         let weekly = UIFixtures.window("7d", label: "Weekly", used: 60, resetsIn: 3 * 86_400, seconds: 604_800)
         let beforeWindows = [UIFixtures.window("5h", label: "5h", used: 95, resetsIn: 2 * 3600, seconds: 18_000), weekly]
         let afterWindows = [UIFixtures.window("5h", label: "5h", used: 0, resetsIn: 5 * 3600, seconds: 18_000), weekly]
         let before = UIFixtures.cached(for: account, windows: beforeWindows, planLabel: "max", resetCreditsAvailable: 2)
         let after = UIFixtures.cached(for: account, windows: afterWindows, planLabel: "max", resetCreditsAvailable: 1)
-        let notice = ResetMessages.notice(for: .outcome(.reset), providerName: "Claude", now: now)
+        let notice = ResetMessages.notice(for: .outcome(.reset), providerName: account.provider.displayName, now: now)
 
         for appearance in Self.appearances {
             let beforeImage = try render(singleRow(account, cached: before, notice: nil, now: now), appearance: appearance.value)
@@ -539,7 +593,7 @@ final class PopupSnapshotTests: XCTestCase {
         fixture.add("codex-503@example.com", provider: .openai, plan: "pro",
                     windows: weekly(88, resetsIn: 86_400), resetCredits: 1)
         fixture.add("claude-503@example.com", provider: .anthropic, plan: "max",
-                    windows: claudeWindows(fable: 40, session: 95, weekly: 60, resetsIn: 3 * 86_400), resetCredits: 1)
+                    windows: claudeWindows(fable: 40, weekly: 60, resetsIn: 3 * 86_400), resetCredits: 1)
         var notices: [UUID: ResetNotice] = [:]
         for account in fixture.accounts {
             notices[account.id] = ResetMessages.notice(for: .providerError(status: 503), providerName: account.provider.displayName, now: now)
@@ -566,8 +620,6 @@ final class PopupSnapshotTests: XCTestCase {
                                  resetsAt: start.addingTimeInterval(2 * day + 3 * 3600), durationSeconds: 604_800)
         guard claudeShaped else { return [weekly] }
         return [
-            UsageWindow(key: "5h", label: "5h", usedPercent: min(100, used + 20),
-                        resetsAt: start.addingTimeInterval(2 * 3600), durationSeconds: 18_000),
             weekly,
             UsageWindow(key: UsageWindow.scopedPrefix + "Fable", label: "Fable", usedPercent: used / 2,
                         resetsAt: start.addingTimeInterval(2 * day + 3 * 3600), durationSeconds: 604_800),
@@ -797,7 +849,7 @@ final class PopupSnapshotTests: XCTestCase {
                 images["\(account.id)-\(appearance.name)"] = try render(modelRow(account, in: harness), appearance: appearance.value)
             }
         }
-        XCTAssertEqual(before[claude.id]?.status.windows.count, 3, "a Claude-shaped row")
+        XCTAssertEqual(before[claude.id]?.status.windows.count, 2, "a Claude-shaped row")
         for appearance in Self.appearances {
             try check(try render(modelPanel(harness), appearance: appearance.value), named: "reset-three-rows-before-\(appearance.name)")
         }
@@ -834,7 +886,7 @@ final class PopupSnapshotTests: XCTestCase {
         var labels = ordered.enumerated().map { offset, account in
             Formatting.barLabel(account: account, index: offset + 1, cached: fixture.statuses[account.id], now: now)
         }
-        XCTAssertEqual(labels.first?.plainText, "1: 5h 100% / WK 100% / FB 100%")
+        XCTAssertEqual(labels.first?.plainText, "1: WK 100% / FB 100%")
         // Stale labels, one of them at 0%: dimmed, but the 0% stays red.
         let states = statesFixture()
         let staleLabels = AccountOrder.grouped(states.accounts).enumerated().compactMap { offset, account -> BarLabel? in
@@ -914,7 +966,8 @@ final class PopupSnapshotTests: XCTestCase {
 
         // Three windows push the count onto a second line of columns; that
         // line is exactly v0.2.0's count-only column.
-        let three = claudeWindows(fable: 10, session: 20, weekly: 30, resetsIn: 86_400)
+        let three = claudeWindows(fable: 10, weekly: 30, resetsIn: 86_400)
+            + [UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 20, resetsIn: 86_400, seconds: 604_800)]
         let threeWithout = fittedHeight(row("b@example.com", provider: .anthropic, windows: three, resetCredits: nil), width: width)
         let threeWith = fittedHeight(row("b@example.com", provider: .anthropic, windows: three, resetCredits: 1), width: width)
         XCTAssertEqual(threeWith, threeWithout + PopupMetrics.columnLineSpacing + countOnly)
@@ -962,7 +1015,7 @@ final class PopupSnapshotTests: XCTestCase {
         for index in 0..<4 {
             fixture.add("extra-\(index)@example.com", provider: index.isMultiple(of: 2) ? .anthropic : .openai, plan: "pro",
                         windows: index.isMultiple(of: 2)
-                            ? claudeWindows(fable: 40, session: 30, weekly: 20, resetsIn: 2 * day)
+                            ? claudeWindows(fable: 40, weekly: 20, resetsIn: 2 * day)
                             : weekly(70, resetsIn: 2 * day),
                         resetCredits: index.isMultiple(of: 2) ? nil : 3)
         }
@@ -983,7 +1036,7 @@ final class PopupSnapshotTests: XCTestCase {
         let scroller = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
         let columnsEnd = PopupMetrics.columnsLeading + PopupMetrics.columnsLineWidth
         let appearance = NSAppearance(named: .darkAqua)!
-        let windows = claudeWindows(fable: 100, session: 100, weekly: 100, resetsIn: 86_400)
+        let windows = claudeWindows(fable: 100, weekly: 100, resetsIn: 86_400)
         let full = try render(row("c@example.com", provider: .anthropic, windows: windows, resetCredits: nil)
             .frame(width: PopupMetrics.width), appearance: appearance)
         for trim in [scroller, scroller + 2] {

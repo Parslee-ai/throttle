@@ -3,15 +3,16 @@
 A macOS menu bar app that shows how much of your Claude and Codex subscription
 limits you have left, across every account you own, at a glance.
 
-Both providers meter usage in rolling windows. Claude has a 5-hour session
-window, a weekly window, and a separate weekly window per top-tier model. Codex
-has a 5-hour window and a weekly window, plus occasional extra lanes. Today the
-only way to read any of them is to open a session logged in to that one account.
-Throttle reads them all and keeps them in the menu bar.
+Both providers meter usage in rolling windows. Claude has a weekly window and a
+separate weekly window per top-tier model. Codex has a weekly window, plus
+occasional extra lanes, and it has switched a shorter window on and off before;
+Throttle shows whatever windows a provider reports. Today the only way to read
+any of them is to open a session logged in to that one account. Throttle reads
+them all and keeps them in the menu bar.
 
 The bar shows one account at a time: the provider glyph, the account's number,
 and each window as a short tag with the percent left, such as
-`1: 5h 100% / WK 89% / FB 79%`. A window reads green, turns yellow at 20 % left
+`1: WK 89% / FB 79%`. A window reads green, turns yellow at 20 % left
 or less, and red when nothing is left. The bar rotates to the next account every
 ten seconds, counting through the same numbers the window shows. Clicking opens
 a window that lists every account, grouped by provider and numbered, with a

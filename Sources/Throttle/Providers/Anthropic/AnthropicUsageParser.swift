@@ -4,15 +4,20 @@ import Foundation
 ///
 /// Two payload shapes are understood:
 ///
-/// - Current: `{"limits": [{"kind": "session" | "weekly_all" | "weekly_scoped",
+/// - Current: `{"limits": [{"kind": "weekly_all" | "weekly_scoped",
 ///   "percent": ..., "resets_at": ..., "scope": {"model": {"display_name": ...}}}]}`
-/// - Legacy: top-level `five_hour`, `seven_day`, and `seven_day_<model>`
-///   objects carrying `utilization`.
+/// - Legacy: top-level `seven_day` and `seven_day_<model>` objects carrying
+///   `utilization`.
+///
+/// Anthropic retired the 5-hour limit but the payload still carries a leftover
+/// `session` entry (current shape) or `five_hour` object (legacy shape), usually
+/// at 0% with no reset. It is ignored in both shapes, whatever its values, so it
+/// never becomes a window. A payload with nothing else in it has no usable
+/// windows.
 ///
 /// Model-scoped windows take their label from the payload, never from a
 /// hardcoded model name, so a renamed or added model shows up on its own.
 enum AnthropicUsageParser {
-    static let sessionSeconds = 18_000
     static let weeklySeconds = 604_800
     static let maxWindows = 12
     static let maxLabelLength = 80
@@ -45,7 +50,6 @@ enum AnthropicUsageParser {
     // MARK: - Current shape
 
     private static func parseCurrent(_ limits: [Any]) -> [UsageWindow] {
-        var session: UsageWindow?
         var weekly: UsageWindow?
         var scoped: [UsageWindow] = []
         var seenKeys = Set<String>()
@@ -56,15 +60,6 @@ enum AnthropicUsageParser {
 
             let candidate: UsageWindow?
             switch kind {
-            case "session":
-                candidate = makeWindow(
-                    key: "5h",
-                    label: UsageWindow.label(forDurationSeconds: sessionSeconds),
-                    duration: sessionSeconds,
-                    percentValue: object["percent"],
-                    resetValue: object["resets_at"],
-                    resetPresent: object.keys.contains("resets_at")
-                )
             case "weekly_all":
                 candidate = makeWindow(
                     key: "7d",
@@ -91,13 +86,12 @@ enum AnthropicUsageParser {
             guard let window = candidate, !seenKeys.contains(window.key) else { continue }
             seenKeys.insert(window.key)
             switch kind {
-            case "session": session = window
             case "weekly_all": weekly = window
             default: scoped.append(window)
             }
         }
 
-        return assemble(session: session, weekly: weekly, scoped: scoped)
+        return assemble(weekly: weekly, scoped: scoped)
     }
 
     private static func scopeDisplayName(_ object: [String: Any]) -> String? {
@@ -109,19 +103,8 @@ enum AnthropicUsageParser {
     // MARK: - Legacy shape
 
     private static func parseLegacy(_ root: [String: Any], rawData: Data) -> [UsageWindow] {
-        var session: UsageWindow?
         var weekly: UsageWindow?
 
-        if let object = root["five_hour"] as? [String: Any] {
-            session = makeWindow(
-                key: "5h",
-                label: UsageWindow.label(forDurationSeconds: sessionSeconds),
-                duration: sessionSeconds,
-                percentValue: object["utilization"] ?? object["percent"],
-                resetValue: object["resets_at"],
-                resetPresent: object.keys.contains("resets_at")
-            )
-        }
         if let object = root["seven_day"] as? [String: Any] {
             weekly = makeWindow(
                 key: "7d",
@@ -162,7 +145,7 @@ enum AnthropicUsageParser {
             }
         }
 
-        return assemble(session: session, weekly: weekly, scoped: scoped)
+        return assemble(weekly: weekly, scoped: scoped)
     }
 
     private static func keyOffset(_ key: String, in data: Data) -> Int {
@@ -178,9 +161,8 @@ enum AnthropicUsageParser {
 
     // MARK: - Shared
 
-    private static func assemble(session: UsageWindow?, weekly: UsageWindow?, scoped: [UsageWindow]) -> [UsageWindow] {
+    private static func assemble(weekly: UsageWindow?, scoped: [UsageWindow]) -> [UsageWindow] {
         var out: [UsageWindow] = []
-        if let session { out.append(session) }
         if let weekly { out.append(weekly) }
         out.append(contentsOf: scoped)
         return Array(out.prefix(maxWindows))

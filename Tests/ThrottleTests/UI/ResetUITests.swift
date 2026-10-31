@@ -88,8 +88,8 @@ final class ResetUITests: XCTestCase {
         XCTAssertEqual(ResetConfirmation.title(count: 2, displayName: "work@example.com"), "Use 1 of 2 resets for work@example.com?")
         XCTAssertEqual(ResetConfirmation.title(count: 1, displayName: "Work"), "Use 1 of 1 reset for Work?")
         let lines = ResetConfirmation.windowLines([
-            UIFixtures.window("5h", label: "5h", used: 70),
-            UIFixtures.window("7d", label: "Weekly", used: 10),
+            UIFixtures.window("7d", label: "Weekly", used: 70),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 10),
         ])
         XCTAssertEqual(lines.count, 2)
         XCTAssertTrue(lines[0].hasSuffix("30% left"), lines[0])

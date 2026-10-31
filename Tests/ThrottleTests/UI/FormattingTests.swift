@@ -241,41 +241,68 @@ final class FormattingTests: XCTestCase {
     func testBarLabelIsNumberThenTaggedWindows() {
         let account = UIFixtures.account("me@example.com")
         let cached = UIFixtures.cached(for: account, windows: [
-            UIFixtures.window("5h", label: "5h", used: 0),
             UIFixtures.window("7d", label: "Weekly", used: 11),
             UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 21),
         ])
         let label = Formatting.barLabel(account: account, index: 1, cached: cached, now: now)
-        XCTAssertEqual(label.plainText, "1: 5h 100% / WK 89% / FB 79%")
+        XCTAssertEqual(label.plainText, "1: WK 89% / FB 79%")
         XCTAssertEqual(label.symbolName, Provider.anthropic.symbolName)
         XCTAssertEqual(label.prefix, "1: ")
-        XCTAssertEqual(label.segments.map(\.band), [.normal, .normal, .normal])
+        XCTAssertEqual(label.segments.map(\.band), [.normal, .normal])
         XCTAssertFalse(label.dimmed)
         XCTAssertFalse(label.isTruncated)
         XCTAssertFalse(label.plainText.contains("me@example.com"))
     }
 
+    /// The live Claude payload still carries a retired session entry. Read all
+    /// the way through the adapter's parser, the menu bar text has no 5h segment.
+    func testClaudeBarLabelFromSessionCarryingPayloadHasNoFiveHourSegment() throws {
+        for (fixture, expected) in [
+            ("anthropic-inactive", "1: WK 100% / FB 100%"),
+            ("anthropic-limits", "1: WK 32% / FB 25% / CL 90%"),
+        ] {
+            let windows = try AnthropicUsageParser.parse(AnthropicFixtures.data(fixture))
+            let account = UIFixtures.account("me@example.com")
+            let cached = UIFixtures.cached(for: account, windows: windows)
+            let label = Formatting.barLabel(account: account, index: 1, cached: cached, now: now)
+            XCTAssertEqual(label.plainText, expected, fixture)
+            XCTAssertFalse(label.plainText.contains("5h"), fixture)
+        }
+    }
+
+    /// A provider that does report a 5-hour window still gets its `5h` segment
+    /// first; only Claude has stopped sending one.
+    func testBarLabelStillShowsAFiveHourWindowAProviderReports() {
+        let account = UIFixtures.account("me@example.com", provider: .openai)
+        let cached = UIFixtures.cached(for: account, windows: [
+            UIFixtures.window("5h", label: "5h", used: 20),
+            UIFixtures.window("7d", label: "Weekly", used: 30),
+        ])
+        let label = Formatting.barLabel(account: account, index: 3, cached: cached, now: now)
+        XCTAssertEqual(label.plainText, "3: 5h 80% / WK 70%")
+    }
+
     func testBarLabelSegmentsCarryTheirBand() {
         let account = UIFixtures.account("me@example.com")
         let cached = UIFixtures.cached(for: account, windows: [
-            UIFixtures.window("5h", label: "5h", used: 85),
-            UIFixtures.window("7d", label: "Weekly", used: 100),
+            UIFixtures.window("7d", label: "Weekly", used: 85),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 100),
             UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 79),
         ])
         let label = Formatting.barLabel(account: account, index: 2, cached: cached, now: now)
-        XCTAssertEqual(label.plainText, "2: 5h 15% / WK 0% / OP 21%")
+        XCTAssertEqual(label.plainText, "2: WK 15% / FB 0% / OP 21%")
         XCTAssertEqual(label.segments.map(\.band), [.warning, .critical, .normal])
     }
 
-    func testBarLabelForTenthAccountWithThreeFullWindowsStaysShort() {
+    func testBarLabelForTenthAccountWithFullWindowsStaysShort() {
         let account = UIFixtures.account("someone.with.a.very.long.name@example.com", nickname: "A very long nickname for work")
         let cached = UIFixtures.cached(for: account, windows: [
-            UIFixtures.window("5h", label: "5h", used: 0),
             UIFixtures.window("7d", label: "Weekly", used: 0),
             UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 0),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 0),
         ])
         let label = Formatting.barLabel(account: account, index: 10, cached: cached, now: now)
-        XCTAssertEqual(label.plainText, "10: 5h 100% / WK 100% / FB 100%")
+        XCTAssertEqual(label.plainText, "10: WK 100% / FB 100% / OP 100%")
         XCTAssertLessThanOrEqual(label.plainText.count, 32)
     }
 
@@ -283,16 +310,16 @@ final class FormattingTests: XCTestCase {
     func testBarLabelDropsWholeSegmentsPastTheBudget() {
         let account = UIFixtures.account("me@example.com")
         let cached = UIFixtures.cached(for: account, windows: [
-            UIFixtures.window("5h", label: "5h", used: 0),
             UIFixtures.window("7d", label: "Weekly", used: 0),
             UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 0),
             UIFixtures.window(UsageWindow.scopedPrefix + "Opus", label: "Opus", used: 0),
             UIFixtures.window(UsageWindow.scopedPrefix + "Sonnet", label: "Sonnet", used: 0),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Haiku", label: "Haiku", used: 0),
         ])
         let label = Formatting.barLabel(account: account, index: 12, cached: cached, now: now)
         XCTAssertTrue(label.isTruncated)
         XCTAssertLessThanOrEqual(label.plainText.count, Formatting.barCharacterBudget, label.plainText)
-        XCTAssertEqual(label.plainText, "12: 5h 100% / WK 100% / FB 100% …")
+        XCTAssertEqual(label.plainText, "12: WK 100% / FB 100% / OP 100% …")
         XCTAssertFalse(label.plainText.contains("\n"))
     }
 
@@ -345,32 +372,32 @@ final class FormattingTests: XCTestCase {
 
     func testStaleLabelIsDimmed() {
         let account = UIFixtures.account("me@example.com")
-        let cached = UIFixtures.cached(for: account, windows: [UIFixtures.window("5h", label: "5h", used: 95)], isStale: true)
+        let cached = UIFixtures.cached(for: account, windows: [UIFixtures.window("7d", label: "Weekly", used: 95)], isStale: true)
         let label = Formatting.barLabel(account: account, index: 4, cached: cached, now: now)
         XCTAssertTrue(label.dimmed)
-        XCTAssertEqual(label.plainText, "4: 5h 5%")
+        XCTAssertEqual(label.plainText, "4: WK 5%")
     }
 
     /// A stale reading dims the label, but a window at 0% keeps its red.
     func testStaleLabelAtZeroPercentKeepsItsRedSegment() {
         let account = UIFixtures.account("me@example.com")
         let cached = UIFixtures.cached(for: account, windows: [
-            UIFixtures.window("5h", label: "5h", used: 40),
             UIFixtures.window("7d", label: "Weekly", used: 100),
+            UIFixtures.window(UsageWindow.scopedPrefix + "Fable", label: "Fable", used: 40),
         ], isStale: true)
         let label = Formatting.barLabel(account: account, index: 2, cached: cached, now: now)
         XCTAssertTrue(label.dimmed)
-        XCTAssertEqual(label.plainText, "2: 5h 60% / WK 0%")
-        XCTAssertEqual(label.segments.map(\.band), [.normal, .critical])
+        XCTAssertEqual(label.plainText, "2: WK 0% / FB 60%")
+        XCTAssertEqual(label.segments.map(\.band), [.critical, .normal])
         let inks = label.segments.map { Colors.ink(for: .barSegment, band: $0.band, dimmed: label.dimmed) }
-        XCTAssertEqual(inks.map(\.tone), [.muted, .red])
-        XCTAssertEqual(Colors.color(for: .barSegment, band: label.segments[1].band, dimmed: label.dimmed), Colors.red)
+        XCTAssertEqual(inks.map(\.tone), [.red, .muted])
+        XCTAssertEqual(Colors.color(for: .barSegment, band: label.segments[0].band, dimmed: label.dimmed), Colors.red)
     }
 
     func testBarLabelNeverCarriesTokenPlanEmailOrNickname() {
         // ISC-116: the label is built from the account's number and the window list only.
         let account = UIFixtures.account("me@example.com", nickname: "Work")
-        let cached = UIFixtures.cached(for: account, windows: [UIFixtures.window("5h", label: "5h", used: 10)], planLabel: "max")
+        let cached = UIFixtures.cached(for: account, windows: [UIFixtures.window("7d", label: "Weekly", used: 10)], planLabel: "max")
         let label = Formatting.barLabel(account: account, index: 1, cached: cached, now: now)
         XCTAssertFalse(label.plainText.contains(account.id.uuidString))
         XCTAssertFalse(label.plainText.lowercased().contains("max"))

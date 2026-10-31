@@ -52,7 +52,7 @@ final class AccountOrderTests: XCTestCase {
 
         var statuses: [UUID: CachedStatus] = [:]
         for account in accounts {
-            statuses[account.id] = UIFixtures.cached(for: account, windows: [UIFixtures.window("5h", label: "5h", used: 10)])
+            statuses[account.id] = UIFixtures.cached(for: account, windows: [UIFixtures.window("7d", label: "Weekly", used: 10)])
         }
         let rotation = RotationController(accounts: accounts, statuses: statuses)
 

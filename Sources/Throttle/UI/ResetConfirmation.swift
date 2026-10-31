@@ -26,7 +26,7 @@ struct ResetConfirmation: View {
 
     static let warning = "A reset can't be undone."
 
-    /// `5-hour limit: 30% left`, one line per window.
+    /// `7-day limit: 30% left`, one line per window.
     static func windowLines(_ windows: [UsageWindow]) -> [String] {
         windows.map { "\(Formatting.longLabel(for: $0)): \(Formatting.remainingPercent(used: $0.usedPercent))% left" }
     }

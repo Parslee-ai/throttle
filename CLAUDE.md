@@ -65,6 +65,11 @@ Rules that hold this seam in place:
   lane name turns that into a crash or a blank row.
 - Model-scoped windows take their label from the payload's own display name.
   Never hardcode a model name.
+- A provider can leave a retired window in its payload. Anthropic's usage
+  response still carries a `session` entry (legacy shape: `five_hour`) after
+  dropping the 5-hour limit; the Anthropic parser ignores it in both shapes
+  whatever its percent or reset, so Claude rows show no 5-hour window. The
+  adapter does this, never the UI.
 - Adding a third provider means a new case on `Provider` and a new file under
   `Providers/`. If it needs anything else, the seam has leaked.
 

@@ -14,7 +14,7 @@ struct BarLabel: Hashable, Sendable {
     /// The account's 1-based position in the display order, the same number
     /// the detail window shows beside the account.
     let index: Int
-    /// Window percentages such as `5h 100%`, or a single state marker such
+    /// Window percentages such as `WK 89%`, or a single state marker such
     /// as `⚠︎ login`.
     let segments: [BarSegment]
     /// True when windows were left out to keep the label short; it then ends
@@ -136,8 +136,9 @@ enum Formatting {
     }
 
     /// The one window order, for the popup, the reset confirmation, and the
-    /// menu bar: session (shortest) window, weekly window, anything else, then
-    /// model-scoped windows. Lanes never reach any of them (ISC-73).
+    /// menu bar: a shorter-than-weekly window if a provider reports one,
+    /// weekly window, anything else, then model-scoped windows. Lanes never
+    /// reach any of them (ISC-73).
     static func windowOrder(_ windows: [UsageWindow]) -> [UsageWindow] {
         let groups = grouped(windows)
         return groups.session + groups.weekly + groups.others + groups.scoped
@@ -339,7 +340,7 @@ enum Formatting {
     // MARK: Bar label
 
     /// The bar label for one account (ISC-107, 110, 111, 115, 116):
-    /// `1: 5h 100% / WK 89% / FB 79%`.
+    /// `1: WK 89% / FB 79%`.
     ///
     /// Only the glyph, the account's number, and window percentages are ever
     /// emitted. The email, the nickname, the account id, the plan, and the

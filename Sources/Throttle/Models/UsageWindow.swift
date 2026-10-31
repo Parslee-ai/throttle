@@ -1,7 +1,8 @@
 import Foundation
 
-/// One rolling usage window reported by a provider, such as the 5-hour session
-/// window or a weekly model-scoped window.
+/// One rolling usage window reported by a provider, such as a weekly window
+/// or a weekly model-scoped window. A provider may also report a shorter one,
+/// such as a 5-hour window.
 struct UsageWindow: Codable, Hashable, Sendable {
     /// Stable identity for the window within its account, e.g. `5h`, `7d`,
     /// `scoped:Opus`. Adapters derive this, never the UI.
