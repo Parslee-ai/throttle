@@ -310,7 +310,7 @@ actor LoopbackCallbackServer {
         let queue = self.queue
         connection.send(content: response, isComplete: true, completion: .contentProcessed { [weak self] _ in
             // Let the browser read the page and close first; never wait longer
-            // than the grace period.
+            // than the shutdown window.
             let closed = LockedFlag()
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in
                 if closed.trySet() { connection.cancel() }
@@ -325,7 +325,7 @@ actor LoopbackCallbackServer {
     }
 
     /// Records the outcome and resumes the waiter. The listener is stopped by
-    /// the response flush, or by the grace timer if that never happens.
+    /// the response flush, or by the shutdown timer if that never happens.
     private func deliver(_ result: Result<LoopbackCallback, Error>) {
         guard outcome == nil else { return }
         outcome = result
