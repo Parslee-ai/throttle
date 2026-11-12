@@ -12,7 +12,11 @@ struct DetailWindow: View {
 
     @State private var pendingRemoval: Account?
     /// The account whose reset is waiting for the user's answer.
-    @State private var pendingReset: Account?
+    @State private var pendingReset: PendingReset?
+    /// A message for a confirmed reset that was not sent because the kind
+    /// picked was no longer spendable. Shown on the row like the model's own
+    /// reset messages, and gone once the model shows one of its own.
+    @State private var heldResetNotices: [UUID: ResetNotice] = [:]
     @State private var showingSettings = false
     @State private var importPicker: ImportPicker?
 
@@ -31,7 +35,8 @@ struct DetailWindow: View {
                         now: now,
                         actions: panelActions,
                         resetsInFlight: model.resetsInFlight,
-                        resetNotices: model.resetNotices
+                        resetNotices: model.resetNotices.merging(heldResetNotices) { _, held in held },
+                        resetGates: model.resetGates
                     )
                 }
             }
@@ -64,15 +69,21 @@ struct DetailWindow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .panelModal(item: pendingReset) { account in
+        .panelModal(item: pendingReset) { pending in
+            // Counts and kinds follow the latest reading while the card is
+            // open; the gate stays as it was when the card opened, so a retry
+            // card never turns into a new attempt.
+            let account = pending.account
             let cached = model.statuses[account.id]
             ResetConfirmation(
                 displayName: account.displayName,
                 count: cached?.status.resetCreditsAvailable ?? 0,
                 windows: Formatting.windowOrder(Formatting.windows(of: cached)),
-                onConfirm: {
+                kinds: cached?.status.resetKinds,
+                gate: pending.gate,
+                onChoice: { choice in
                     pendingReset = nil
-                    model.useReset(account)
+                    confirmReset(account, choice: choice)
                 },
                 onCancel: { pendingReset = nil }
             )
@@ -91,6 +102,50 @@ struct DetailWindow: View {
         }
         // Under a card taller than the content, the panel grows; paint it.
         .background(Colors.windowBackground)
+        .onChange(of: model.resetNotices) { old, new in
+            for id in heldResetNotices.keys where old[id] != new[id] {
+                heldResetNotices[id] = nil
+            }
+        }
+    }
+
+    /// The account a reset confirmation is open for, and the gate it opened
+    /// under.
+    struct PendingReset {
+        let account: Account
+        let gate: ResetGate?
+    }
+
+    /// Sends the confirmed reset, unless the account changed under the card
+    /// in a way that makes it the wrong one to send.
+    private func confirmReset(_ account: Account, choice: ResetConfirmation.Choice) {
+        let outcome = ResetConfirmation.outcome(
+            of: choice,
+            status: model.statuses[account.id]?.status,
+            gate: model.resetGates[account.id]
+        )
+        switch outcome {
+        case .send(let kind, let retrying):
+            heldResetNotices[account.id] = nil
+            model.useReset(account, choice: kind, retrying: retrying)
+        case .hold(_?, let label):
+            guard let notice = ResetConfirmation.heldNotice(
+                for: outcome,
+                providerName: account.provider.displayName,
+                now: Date()
+            ) else { return }
+            heldResetNotices[account.id] = notice
+            NSAccessibility.post(
+                element: NSApp as Any,
+                notification: .announcementRequested,
+                userInfo: [
+                    .announcement: ResetMessages.announcement(for: notice, kindLabel: label),
+                    .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ]
+            )
+        case .hold(nil, _):
+            break
+        }
     }
 
     static let removalMessage = "Throttle forgets the login. Nothing changes at the provider."
@@ -117,9 +172,12 @@ struct DetailWindow: View {
             useReset: { account in
                 // One confirmation at a time, and none while this row's reset runs.
                 guard pendingReset == nil, !model.resetsInFlight.contains(account.id) else { return }
-                pendingReset = account
+                pendingReset = PendingReset(account: account, gate: model.resetGates[account.id])
             },
-            dismissResetNotice: { model.dismissResetNotice(for: $0) }
+            dismissResetNotice: { account in
+                heldResetNotices[account.id] = nil
+                model.dismissResetNotice(for: account)
+            }
         )
     }
 

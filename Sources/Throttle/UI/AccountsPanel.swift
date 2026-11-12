@@ -35,6 +35,8 @@ struct AccountsPanel: View {
     var resetsInFlight: Set<UUID> = []
     /// Each account's reset message, if one is showing.
     var resetNotices: [UUID: ResetNotice] = [:]
+    /// What an unsettled reset attempt leaves each account to offer.
+    var resetGates: [UUID: ResetGate] = [:]
 
     @State private var reportedHeights: [String: CGFloat] = [:]
 
@@ -147,7 +149,8 @@ struct AccountsPanel: View {
                     dismissResetNotice: { actions.dismissResetNotice(account) }
                 ),
                 isResetting: resetsInFlight.contains(account.id),
-                resetNotice: resetNotices[account.id]
+                resetNotice: resetNotices[account.id],
+                resetGate: resetGates[account.id]
             )
             if !isLast {
                 Rectangle()

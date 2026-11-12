@@ -9,6 +9,15 @@ enum ResetMessages {
     static let noResets = "No resets available"
     static let notAvailable = "Resets aren't available for this account right now"
     static let needsFreshReading = "Getting the latest reset counts — try again in a moment"
+    /// A kind line's reason when the provider lists the kind with none left.
+    static let noneLeft = "None left"
+    /// The Use reset button's reason when several kinds are all blocked.
+    static let noKindSpendable = "No reset can be used right now"
+    /// Every kind's reason while an earlier attempt waits for its retry.
+    static let finishEarlierReset = "Finish the earlier reset first"
+    /// Every kind's reason after an unsettled attempt closed, until the
+    /// account's next successful reading.
+    static let waitingForFreshReading = "Waiting for a fresh reading"
     /// Longest message a row ever shows.
     static let maxLength = 300
     /// How long the success note stays before it fades.
@@ -21,7 +30,7 @@ enum ResetMessages {
     static func notice(for result: ResetResult, providerName: String, now: Date, kindLabel: String? = nil) -> ResetNotice? {
         switch result {
         case .outcome(.reset):
-            return ResetNotice(success, kind: .success)
+            return ResetNotice(successText(kindLabel: kindLabel), kind: .success)
         case .outcome(.nothingToReset):
             return failure(nothingToReset)
         case .outcome(.noCredit):
@@ -58,6 +67,29 @@ enum ResetMessages {
         }
     }
 
+    /// `Full reset used — limits refreshed`, or the plain success note when
+    /// no kind was picked.
+    static func successText(kindLabel: String?) -> String {
+        guard let kindLabel else { return success }
+        return sanitized("\(kindLabel) used — limits refreshed")
+    }
+
+    /// The reason a kind line gives on hover. It differs from `text(for:)`
+    /// only for a kind with none left, whose line already reads 0: the line
+    /// says "None left", while a refused click says "No resets available".
+    static func lineReason(for reason: ResetKind.Reason, kindLabel: String?, now: Date) -> String {
+        if case .noneLeft = reason { return noneLeft }
+        return text(for: reason, kindLabel: kindLabel, now: now)
+    }
+
+    /// What VoiceOver announces for a result: the notice, led by the kind's
+    /// label when the notice does not already name it, so a refusal is heard
+    /// with the kind it was for.
+    static func announcement(for notice: ResetNotice, kindLabel: String?) -> String {
+        guard let kindLabel, !notice.text.hasPrefix(kindLabel) else { return notice.text }
+        return "\(kindLabel): \(notice.text)"
+    }
+
     /// The plain reason a kind cannot be spent right now. A model refill's
     /// reason names the model, which is its kind label without the trailing
     /// "reset".
@@ -82,7 +114,9 @@ enum ResetMessages {
         }
     }
 
-    private static func modelName(fromKindLabel label: String?) -> String {
+    /// A model refill's model name: its kind label without the trailing
+    /// "reset". Empty when there is no label.
+    static func modelName(fromKindLabel label: String?) -> String {
         guard let label else { return "" }
         let suffix = " reset"
         let trimmed = label.lowercased().hasSuffix(suffix) ? String(label.dropLast(suffix.count)) : label
