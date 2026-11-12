@@ -1,0 +1,78 @@
+{
+  "limits": [
+    {
+      "kind": "weekly_all",
+      "percent": 40,
+      "resets_at": "2026-07-20T12:00:00Z",
+      "is_active": true
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 55,
+      "resets_at": "2026-07-20T12:00:00Z",
+      "scope": {
+        "model": {
+          "display_name": "Testmodel"
+        }
+      }
+    }
+  ],
+  "cedar_ember": {
+    "eligible": true,
+    "ineligible_reason": null,
+    "at_limit": false,
+    "grants": [
+      {
+        "id": "grant-full-late",
+        "type": "full",
+        "label": "Example full grant",
+        "resets_total": 1,
+        "resets_left": 1,
+        "starts_at": "2026-07-01T00:00:00Z",
+        "ends_at": "2026-08-01T00:00:00Z",
+        "clears": ["seven_day"],
+        "paused": false,
+        "usable_now": true,
+        "use_requires_limit": false,
+        "gives_back_weekly": false,
+        "percent_used": {},
+        "blocking": []
+      },
+      {
+        "id": "grant-full-soon",
+        "type": "full",
+        "label": "Example full grant",
+        "resets_total": 1,
+        "resets_left": 1,
+        "starts_at": "2026-07-01T00:00:00Z",
+        "ends_at": "2026-07-25T00:00:00Z",
+        "clears": ["seven_day"],
+        "paused": false,
+        "usable_now": true,
+        "use_requires_limit": false,
+        "gives_back_weekly": false,
+        "percent_used": {},
+        "blocking": []
+      },
+      {
+        "id": "grant-sentinel-1",
+        "type": "weekly",
+        "label": "Example model refill",
+        "resets_total": 2,
+        "resets_left": 2,
+        "starts_at": "2026-07-01T00:00:00Z",
+        "ends_at": "2026-08-01T00:00:00Z",
+        "clears": [],
+        "paused": false,
+        "usable_now": true,
+        "use_requires_limit": false,
+        "gives_back_weekly": true,
+        "percent_used": {"model_a": 12.5},
+        "blocking": []
+      }
+    ],
+    "next_grant_id": null,
+    "weekly_resets_at": "2026-07-20T12:00:00Z",
+    "cooldown_until": null
+  }
+}

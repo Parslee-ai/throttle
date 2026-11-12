@@ -121,6 +121,9 @@ final class AppModel {
     /// The running reset per account. Owned here, not by any view, so closing
     /// the window or using the row's other actions never cancels one.
     @ObservationIgnored private(set) var resetTasks: [UUID: Task<Void, Never>] = [:]
+    /// Per account, the timer that closes a retryable attempt when its retry
+    /// window ends, so the gate flips with no click.
+    @ObservationIgnored private(set) var retryWindowTasks: [UUID: Task<Void, Never>] = [:]
     /// Waits out the success note's lifetime; the note fades when it returns.
     @ObservationIgnored let successNoteExpiry: @Sendable () async -> Void
 
@@ -247,6 +250,22 @@ final class AppModel {
             .max()
         adoptProviderEmails(from: snapshot)
         adoptPlanLabels(from: snapshot)
+        liftReadingGates()
+    }
+
+    /// A new snapshot may carry the reading an `.awaitingReading` gate waits
+    /// for. The scheduler, which numbers reads, decides whether it does.
+    private func liftReadingGates() {
+        let waiting = resetGates.filter { $0.value == .awaitingReading }.map(\.key)
+        guard !waiting.isEmpty else { return }
+        let scheduler = scheduler
+        Task {
+            for accountID in waiting {
+                let state = await scheduler.resetAttemptState(for: accountID)
+                guard resetGates[accountID] == .awaitingReading, !resetsInFlight.contains(accountID) else { continue }
+                adoptAttemptState(state, for: accountID, label: nil)
+            }
+        }
     }
 
     /// The plan badge follows what the usage payload reports (ISC-74), so a
@@ -339,37 +358,121 @@ final class AppModel {
     /// kind is unfinished, nothing is sent and that attempt is left as it is.
     ///
     /// `retrying` is true when the user confirmed a retry of an unsettled
-    /// attempt, and false for a new one.
+    /// attempt, and false for a new one. A retry reuses that attempt's id and
+    /// skips the count check, because the reading may show the kind spent by
+    /// the very send being retried. A retry whose attempt has ended sends
+    /// nothing and never becomes a new attempt.
+    ///
+    /// For a provider with a retry window, `resetGates` follows the
+    /// scheduler: while a gate is up, a new attempt sends nothing.
     func useReset(_ account: Account, choice: ResetKind.Key? = nil, retrying: Bool = false) {
         guard !resetsInFlight.contains(account.id) else { return }
-        guard let count = statuses[account.id]?.status.resetCreditsAvailable, count > 0 else {
-            showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: account.id)
-            return
+        let accountID = account.id
+        let windowed = scheduler.hasResetRetryWindow(account.provider)
+        let attemptID: UUID
+        if retrying {
+            guard let pending = resetAttempts.pendingID(for: accountID, choice: choice) else { return }
+            if windowed {
+                guard case .retryOnly(let kind, _) = resetGates[accountID], kind == choice else { return }
+            }
+            attemptID = pending
+        } else {
+            if windowed, resetGates[accountID] != nil { return }
+            guard let count = statuses[accountID]?.status.resetCreditsAvailable, count > 0 else {
+                showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: accountID)
+                return
+            }
+            guard let id = resetAttempts.attemptID(for: accountID, choice: choice) else { return }
+            attemptID = id
         }
-        guard let attemptID = resetAttempts.attemptID(for: account.id, choice: choice) else { return }
-        resetNotices[account.id] = nil
+        resetNotices[accountID] = nil
         // Taken now: the read after the attempt may drop the kind.
         let kindLabel = choice.flatMap { key in
-            statuses[account.id]?.status.resetKinds?.first { $0.key == key }?.label
+            statuses[accountID]?.status.resetKinds?.first { $0.key == key }?.label
         }
-        resetsInFlight.insert(account.id)
+        resetsInFlight.insert(accountID)
         let scheduler = scheduler
         // Owned by the model, not the window: closing the window does not
         // cancel the reset. The result is keyed by id, so a rename or move
         // while it runs lands it on the same row.
-        let accountID = account.id
         let providerName = account.provider.displayName
         resetTasks[accountID] = Task {
             let result = await scheduler.useReset(accountID: accountID, attemptID: attemptID, choice: choice)
+            // Read before the row takes clicks again, so no click lands
+            // between the result and the gate it sets.
+            let state = windowed ? await scheduler.resetAttemptState(for: accountID) : nil
             resetsInFlight.remove(accountID)
             resetTasks[accountID] = nil
             resetAttempts.finish(accountID, with: result)
             // A row removed during the reset gets no message back.
             guard accounts.contains(where: { $0.id == accountID }) else { return }
+            if windowed {
+                adoptAttemptState(state, for: accountID, label: kindLabel)
+            }
             if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(), kindLabel: kindLabel) {
                 showResetNotice(notice, for: accountID)
             }
         }
+    }
+
+    /// Sets the row's gate from the scheduler's word on its attempt. `label`
+    /// is the kind's label at the click; a gate already showing the same
+    /// kind keeps its own when the kind has since gone from the reading.
+    private func adoptAttemptState(_ state: ResetAttemptState?, for accountID: UUID, label: String?) {
+        resetAttempts.adopt(accountID, state: state)
+        switch state {
+        case .retryable(let attemptID, let choice, _):
+            var shown = label
+            if shown == nil, case .retryOnly(let kind, let earlier) = resetGates[accountID], kind == choice {
+                shown = earlier
+            }
+            resetGates[accountID] = .retryOnly(kind: choice, label: shown)
+            watchRetryWindow(accountID, attemptID: attemptID)
+        case .awaitingReading:
+            resetGates[accountID] = .awaitingReading
+            stopWatchingRetryWindow(accountID)
+        case nil:
+            resetGates[accountID] = nil
+            stopWatchingRetryWindow(accountID)
+        }
+    }
+
+    /// Closes the attempt when its window ends, so the row flips to
+    /// `.awaitingReading` with no click, then asks for the one read.
+    private func watchRetryWindow(_ accountID: UUID, attemptID: UUID) {
+        retryWindowTasks[accountID]?.cancel()
+        let scheduler = scheduler
+        retryWindowTasks[accountID] = Task {
+            let closed = await scheduler.closeAttemptWhenWindowEnds(accountID, attemptID: attemptID)
+            guard !Task.isCancelled, closed == .awaitingReading,
+                  !resetsInFlight.contains(accountID) else { return }
+            retryWindowTasks[accountID] = nil
+            adoptAttemptState(closed, for: accountID, label: nil)
+            let after = await scheduler.readAfterClosedAttempt(accountID)
+            guard !Task.isCancelled, resetGates[accountID] == .awaitingReading,
+                  !resetsInFlight.contains(accountID) else { return }
+            adoptAttemptState(after, for: accountID, label: nil)
+        }
+    }
+
+    private func stopWatchingRetryWindow(_ accountID: UUID) {
+        retryWindowTasks.removeValue(forKey: accountID)?.cancel()
+    }
+
+    /// Drops everything the model holds about the account's attempt.
+    private func forgetResetAttempt(_ accountID: UUID) {
+        resetAttempts.forget(accountID)
+        resetGates[accountID] = nil
+        stopWatchingRetryWindow(accountID)
+    }
+
+    /// A login for the account finished, new or repeated. Whatever the
+    /// adapter and the scheduler remember from the earlier sign-in, the
+    /// attempt and its kind included, is dropped before the first read.
+    func accountDidSignIn(_ accountID: UUID, provider: Provider) async {
+        await registry.usageProvider(for: provider).accountDidSignIn(accountID)
+        await scheduler.accountDidSignIn(accountID)
+        forgetResetAttempt(accountID)
     }
 
     /// Closes the row's reset message.
@@ -398,8 +501,10 @@ final class AppModel {
 
     func remove(_ account: Account) {
         resetNotices[account.id] = nil
-        resetAttempts.forget(account.id)
+        forgetResetAttempt(account.id)
+        let scheduler = scheduler
         Task {
+            await scheduler.forgetResetAttempt(account.id)
             do {
                 try await store.remove(id: account.id)
                 // A read still running for the account can no longer write it.
@@ -546,7 +651,7 @@ final class AppModel {
         }
         // The adapter may remember the account from its old sign-in (such as
         // the plan); the new sign-in replaces all of it.
-        await registry.usageProvider(for: flow.provider).accountDidSignIn(account.id)
+        await accountDidSignIn(account.id, provider: flow.provider)
         await publishAccounts()
         await scheduler.refreshNow()
     }
@@ -573,7 +678,7 @@ final class AppModel {
                     email: candidate.label,
                     credential: candidate.credential
                 )
-                await registry.usageProvider(for: candidate.provider).accountDidSignIn(account.id)
+                await accountDidSignIn(account.id, provider: candidate.provider)
                 await publishAccounts()
                 await scheduler.refreshNow()
             } catch {

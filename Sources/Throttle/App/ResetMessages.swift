@@ -173,31 +173,29 @@ struct ResetAttempts {
         ambiguous.remove(accountID)
     }
 
-    enum Ending: Equatable {
-        /// The provider said what happened to this attempt.
-        case definitive
-        /// The request was turned away before it was processed, or the
-        /// adapter sent nothing (the kind is blocked, a reading is needed).
-        case refused
-        /// The reset may or may not have been spent.
-        case ambiguous
-        /// Nothing was sent (a second click during a run).
-        case nothingHappened
-    }
+    typealias Ending = ResetAttemptEnding
 
     static func ending(of result: ResetResult) -> Ending {
-        switch result {
-        case .outcome(.reset), .outcome(.nothingToReset), .outcome(.noCredit),
-             .outcome(.cooldown), .outcome(.notAvailable), .unsupported:
-            return .definitive
-        case .needsLogin, .forbidden, .rateLimited, .outcome(.blocked), .outcome(.needsFreshReading):
-            return .refused
-        case .providerError(let status):
-            return (300..<500).contains(status) ? .refused : .ambiguous
-        case .outcome(.unexpected), .unexpected, .unreachable:
-            return .ambiguous
-        case .alreadyRunning:
-            return .nothingHappened
+        result.attemptEnding
+    }
+
+    /// The unfinished attempt's id when it was started for `choice`, without
+    /// starting one: a retry never becomes a new attempt.
+    func pendingID(for accountID: UUID, choice: ResetKind.Key?) -> UUID? {
+        guard let attempt = pending[accountID], attempt.choice == choice else { return nil }
+        return attempt.id
+    }
+
+    /// Takes the scheduler's word for an account with a retry window: its
+    /// retryable attempt is the pending one, and anything else ends it.
+    mutating func adopt(_ accountID: UUID, state: ResetAttemptState?) {
+        guard case .retryable(let id, let choice, _) = state else {
+            forget(accountID)
+            return
         }
+        if pending[accountID]?.id != id {
+            pending[accountID] = Pending(id: id, choice: choice)
+        }
+        ambiguous.insert(accountID)
     }
 }

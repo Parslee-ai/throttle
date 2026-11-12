@@ -44,10 +44,22 @@ protocol UsageProvider: Sendable {
     /// A login for this account just finished, new or repeated. Anything the
     /// adapter remembered about the account from before is out of date.
     func accountDidSignIn(_ accountID: UUID) async
+
+    /// How long after an attempt's first send a retry may still reuse its
+    /// request id, or `nil` when the provider names no such limit.
+    ///
+    /// A provider that names one also gets the scheduler's strict rules for
+    /// an attempt that went unanswered: past the window it is closed without
+    /// a send; a refusal of its retry is reported as unexpected, since it
+    /// cannot prove the first send spent nothing; and once closed, no new
+    /// attempt is accepted until a usage read made afterwards succeeds.
+    var resetRetryWindow: TimeInterval? { get }
 }
 
 extension UsageProvider {
     func accountDidSignIn(_ accountID: UUID) async {}
+
+    var resetRetryWindow: TimeInterval? { nil }
 
     /// A provider with no reset to spend.
     func useReset(

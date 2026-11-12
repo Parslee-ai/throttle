@@ -68,6 +68,7 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         /// When set, the reset count every successful fetch reports.
         var resetCredits: Int?
         var resetKinds: [ResetKind]?
+        var resetRetryWindow: TimeInterval?
         var fetchWaiters: [CheckedContinuation<Void, Never>] = []
         var pendingFetchReleases = 0
         /// Reads running right now, per account, and the most ever seen.
@@ -160,6 +161,15 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
     /// becomes the reported count.
     func setResetKinds(_ kinds: [ResetKind]?) {
         state.withLock { $0.resetKinds = kinds }
+    }
+
+    /// The retry window this double names, `nil` (the default) for none.
+    func setResetRetryWindow(_ window: TimeInterval?) {
+        state.withLock { $0.resetRetryWindow = window }
+    }
+
+    var resetRetryWindow: TimeInterval? {
+        state.withLock { $0.resetRetryWindow }
     }
 
     /// Lets one waiting `.waitThenAnswer` reset answer (or the next one, if
