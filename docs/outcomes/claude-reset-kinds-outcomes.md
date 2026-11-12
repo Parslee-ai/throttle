@@ -4,6 +4,8 @@ A Claude account can hold more than one kind of banked reset: a full reset, and 
 
 Reference for the provider's payload and answers: the `claudeResetGrants` service and its tests in `router-for-me/Cli-Proxy-API-Management-Center`, the management UI of CLIProxyAPI. It is third-party evidence, not a specification.
 
+The provider reports banked resets only to a client that identifies itself as a current Claude Code CLI; any other client name is answered as not eligible. The owner's decision for this version is to do what the reference does: Throttle's Claude account requests carry the Claude Code CLI's client name. This replaces the earlier rule that Throttle always sends its own name to Claude.
+
 ## Who uses this and how each outcome is confirmed
 
 | Who | Surface | Confirmed by |
@@ -68,6 +70,10 @@ Channel: the real running app, or snapshot PNGs opened and read.
 
 Channel: named unit tests against fixtures, and greps.
 
+- The Claude usage read, the profile read and the reset request each send `User-Agent: claude-cli/<version> (external, cli)`, where the version is one constant in the Claude endpoints file naming a real, current Claude Code release. This replaces "Throttle's own User-Agent, never Claude Code's".
+- No other header is added or changed on those three requests, and the usage read's query items stay exactly `at_wall=1`, `skip_spend=1`, `cedar_ember=1`.
+- The token exchange and token refresh requests are unchanged: same URLs, bodies and headers as 0.5.1.
+- The client name appears in exactly one place under `Sources/`, the Claude endpoints file; a grep for `claude-cli` lists that file only.
 - Each valid grant is read with its kind, resets left, total when sent, start, expiry, and its paused, usable-now and requires-a-limit flags (new fixture `anthropic-resets-kinds.json`).
 - Kind is decided by one rule, tested as a table: `gives_back_weekly: true` is the model refill whatever `type` says; otherwise a `type` of `weekly`, `session` or `full`; any other, missing or non-text `type` is the unknown kind, which is still counted and can still be spent.
 - The account's status reports one entry per kind present, each with resets left summed over that kind's valid, unexpired grants. A fixture with full 2, full 1 and model refill 1 yields full 3 and model refill 1. This replaces "the count is the sum of `resets_left` across valid grants".
@@ -92,7 +98,9 @@ Channel: named unit tests against fixtures, and greps.
 - An unreadable account-level cooldown, or a non-boolean `at_limit`, leaves the counts shown and makes every kind non-spendable. The count is still true; spending is what must fail closed.
 - Every shape above, and every shape in the existing malformed fixture, leaves the parsed windows equal to the clean fixture's.
 - `eligible: false` still yields no kinds and no count. Eligible with no grants yields no kinds and a count of 0. Existing tests unedited.
-- When a reset block is present and eligible but yields no count, one diagnostics line says which rule failed, with no grant id, label or reason code, at most once per account per launch. This is what makes a live row with no column diagnosable.
+- When a reset block is present and eligible but yields no count, one diagnostics line says which rule failed, with no grant id or label, at most once per account per launch.
+- When a reset block says the account is not eligible, one diagnostics line records why, at most once per account per launch and again only when the reason changes. The reason written is one of a fixed list (`config_off`, `tier`, `seat`, `mobile`, `surface`, `cli_version`, `no_grant`, `tenure`, `other_experiment`, `unavailable`); anything else is written as `unknown`, so provider text never reaches the log. Together these two lines make a live row with no column diagnosable, including the day the pinned client version goes out of date.
+- The not-eligible reason goes to the diagnostics log only: never to the screen, the status cache or a message.
 - An encoded status and the status cache carry each kind's label, count, spendable flag, reason and times only: no grant id, grant label, codename or provider reason string. `grep -rn "cedar\|juniper\|gives_back" Sources/Throttle/UI Sources/Throttle/Models` prints nothing.
 
 ## C. Claude reset kinds: spending the chosen one
@@ -167,6 +175,9 @@ Channel: named tests, greps, literal command output.
 - `git diff main --stat` is empty for `Sources/Throttle/Update` and `Tests/ThrottleTests/Update`. Imports are Apple frameworks only, there is no `Package.swift`, and nothing new under `scripts/` or `.github/` is anything but bash.
 - `scripts/build.sh` ends with zero warnings. `scripts/test.sh` ends `** TEST SUCCEEDED **` with at least 670 tests plus the new ones and zero failures.
 - New fixtures carry no real email, account id, organization id, grant id, token or home path.
+- Changing the client name causes no new refusal: after one full live cycle on the released build, the diagnostics log shows no new 4xx on any Claude usage or profile read, and every Claude row still shows its windows.
+- If the live reads with the new client name are refused where 0.5.1's were not, the next release returns to Throttle's own client name: rows keep their windows and lose the resets column, and the fallback is recorded. Losing the resets is acceptable; losing the windows is not.
+- README and CLAUDE.md say plainly that Throttle's Claude account requests identify as the Claude Code CLI, why (the provider reports banked resets to that client only), and that this is undocumented and may stop working. No doc or comment still says Throttle sends its own name to Claude.
 - CLAUDE.md's banked-reset section says the user picks a kind, the choice crosses the seam as a provider-neutral key, and the adapter resolves it to a grant. README's read-only paragraph says an account may hold more than one kind of reset and that Throttle spends the one clicked. The doc comments on `useReset` and `resetCreditsAvailable` describe the choice and the total truthfully.
 
 ## F. Shipping it
@@ -179,7 +190,7 @@ Channel: named tests, greps, literal command output.
 - A dev build is never run beside the installed app: two instances share one account store and Keychain. Live outcomes are checked on the released build.
 - On the installed 0.6.0, the account ids and count in `accounts.json` and the Keychain item count are the same as before the update, and every existing row shows its windows as before.
 - On the installed 0.6.0, every Codex row reads as it did on 0.5.1.
-- On the installed 0.6.0, every Claude row whose provider reports resets lists them by kind with counts. If no Claude row shows the column, the diagnostics log is read: either no account reports an eligible reset block, which is recorded as such, or the log names the rule that hid one, which is a defect and goes back to the build.
+- On the installed 0.6.0, every Claude row whose provider reports resets lists them by kind with counts. If no Claude row shows the column, the diagnostics log is read and its reason recorded: `cli_version` or `surface` means the client name was not accepted, and a line naming a parsing rule means the payload differs from the reference; both are defects that go back to the build. Any other reason means the account holds no resets, which is recorded as such.
 - A real Claude reset is only ever the owner's own click. When it happens, the confirmation names the kind, the provider's answer shows with the wording above, and the kind's count afterwards equals the provider's fresh reading. Until then this outcome is recorded as awaiting the owner's use.
 
 ## Not in this version
@@ -192,7 +203,10 @@ Channel: named tests, greps, literal command output.
 - A hint recommending which kind to use.
 - Keeping an unresolved attempt across a relaunch, or expiring one after a fixed time while the app stays open.
 - A fresh usage read before every spend. The Claude usage read has answered a single extra call with a one-hour hold, so the last poll's reading plus the click-time clock decides.
-- Showing the provider's ineligibility reason, or any reason code.
+- Showing the provider's ineligibility reason, or any reason code, on screen.
+- Copying anything of the Claude Code client beyond its client name: no extra headers, header order, TLS fingerprint or SDK version strings.
+- Updating the pinned client version without a Throttle release, or telling the user on screen that it has gone out of date.
+- Changing the client name sent to Codex.
 - Rejecting the whole reset block on one bad grant.
 - Any reset program other than the banked one, and the weekly session-reset trial.
 - A per-kind history or log of spends.
