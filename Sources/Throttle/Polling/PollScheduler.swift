@@ -645,7 +645,12 @@ actor PollScheduler {
     /// - The read after the reset never overlaps a poll's read of the same
     ///   account. It waits for one in flight, and skips when a read that
     ///   started after the reset finished has already succeeded.
-    func useReset(accountID: UUID, attemptID: UUID) async -> ResetResult {
+    /// - `choice`, the kind the owner picked, reaches the adapter exactly as
+    ///   given, on the first send and on the resend after a 401. The
+    ///   scheduler never reads it, so it can never pick a kind itself.
+    /// - When the adapter answers that it needs a reading first, nothing was
+    ///   spent, so the one read runs without the settle delay.
+    func useReset(accountID: UUID, attemptID: UUID, choice: ResetKind.Key? = nil) async -> ResetResult {
         guard resetsInFlight.insert(accountID).inserted else {
             return .alreadyRunning
         }
@@ -661,7 +666,7 @@ actor PollScheduler {
             await diagnose(account, provider: provider, at: clock.now(),
                            message: "Reset not sent; backing off until \(until.formatted(.iso8601))")
         } else {
-            result = await attemptReset(account, adapter: adapter, attemptID: attemptID)
+            result = await attemptReset(account, adapter: adapter, attemptID: attemptID, choice: choice)
         }
         // Reads numbered above this one started after the reset finished.
         let completedAt = readSequence
@@ -681,7 +686,7 @@ actor PollScheduler {
             // read, so a second reset is still refused and the row keeps its
             // spinner until the fresh numbers land. A cancelled wait (the app
             // quitting) sends nothing.
-            if resetReadDelay > 0 {
+            if resetReadDelay > 0, result != .outcome(.needsFreshReading) {
                 do {
                     try await clock.sleep(for: resetReadDelay)
                 } catch {
@@ -700,7 +705,12 @@ actor PollScheduler {
 
     /// Sends the reset, and on an auth rejection refreshes once and resends
     /// the same attempt. Each send has its own `resetTimeout`.
-    private func attemptReset(_ account: Account, adapter: any UsageProvider, attemptID: UUID) async -> ResetResult {
+    private func attemptReset(
+        _ account: Account,
+        adapter: any UsageProvider,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async -> ResetResult {
         let store = store
         let resolver = resolver
         let clock = clock
@@ -716,7 +726,12 @@ actor PollScheduler {
                     // refresh itself is the resolver's and still finishes.
                     try Task.checkCancellation()
                     do {
-                        let outcome = try await adapter.useReset(account: account, credential: credential, attemptID: attemptID)
+                        let outcome = try await adapter.useReset(
+                            account: account,
+                            credential: credential,
+                            attemptID: attemptID,
+                            choice: choice
+                        )
                         return (credential, .success(outcome))
                     } catch {
                         return (credential, .failure(error))
@@ -740,7 +755,7 @@ actor PollScheduler {
                             using: adapter
                         )
                         try Task.checkCancellation()
-                        return try await adapter.useReset(account: account, credential: fresh, attemptID: attemptID)
+                        return try await adapter.useReset(account: account, credential: fresh, attemptID: attemptID, choice: choice)
                     }
                 }
                 return .outcome(outcome)
@@ -819,6 +834,8 @@ actor PollScheduler {
         case .outcome(.cooldown(let until)): return "cooldown until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
         case .outcome(.notAvailable): return "not available"
         case .outcome(.unexpected): return "unexpected answer"
+        case .outcome(.blocked(let reason)): return "kind blocked: \(logDescription(of: reason))"
+        case .outcome(.needsFreshReading): return "needs a fresh reading"
         case .rateLimited(let until): return "rate limited until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
         case .needsLogin: return "needs login"
         case .forbidden(let reason): return "forbidden: \(reason)"
@@ -827,6 +844,19 @@ actor PollScheduler {
         case .unexpected: return "unexpected reply"
         case .unsupported: return "unsupported"
         case .alreadyRunning: return "already running"
+        }
+    }
+
+    /// The plain words for a blocked kind's reason. Never a provider code.
+    private static func logDescription(of reason: ResetKind.Reason) -> String {
+        switch reason {
+        case .cooldown(let until): return "cooldown until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
+        case .noneLeft: return "none left"
+        case .notStarted(let startsAt): return "starts \(startsAt.formatted(.iso8601))"
+        case .paused: return "paused"
+        case .notUsableNow: return "not usable now"
+        case .usableOnlyAtLimit: return "usable only at a limit"
+        case .nothingToGiveBack: return "nothing to give back"
         }
     }
 

@@ -330,14 +330,22 @@ final class AppModel {
     /// Spends one banked reset for the account. Called only after the user
     /// confirmed. The count is checked again here, because a poll may have
     /// landed while the confirmation was open; at 0 nothing is sent.
-    func useReset(_ account: Account) {
+    ///
+    /// `choice` is the kind the user picked, `nil` on a row with no kinds.
+    /// It goes to the adapter untouched. While an earlier attempt for another
+    /// kind is unfinished, nothing is sent and that attempt is left as it is.
+    func useReset(_ account: Account, choice: ResetKind.Key? = nil) {
         guard !resetsInFlight.contains(account.id) else { return }
         guard let count = statuses[account.id]?.status.resetCreditsAvailable, count > 0 else {
             showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: account.id)
             return
         }
+        guard let attemptID = resetAttempts.attemptID(for: account.id, choice: choice) else { return }
         resetNotices[account.id] = nil
-        let attemptID = resetAttempts.attemptID(for: account.id)
+        // Taken now: the read after the attempt may drop the kind.
+        let kindLabel = choice.flatMap { key in
+            statuses[account.id]?.status.resetKinds?.first { $0.key == key }?.label
+        }
         resetsInFlight.insert(account.id)
         let scheduler = scheduler
         // Owned by the model, not the window: closing the window does not
@@ -346,13 +354,13 @@ final class AppModel {
         let accountID = account.id
         let providerName = account.provider.displayName
         resetTasks[accountID] = Task {
-            let result = await scheduler.useReset(accountID: accountID, attemptID: attemptID)
+            let result = await scheduler.useReset(accountID: accountID, attemptID: attemptID, choice: choice)
             resetsInFlight.remove(accountID)
             resetTasks[accountID] = nil
             resetAttempts.finish(accountID, with: result)
             // A row removed during the reset gets no message back.
             guard accounts.contains(where: { $0.id == accountID }) else { return }
-            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date()) {
+            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(), kindLabel: kindLabel) {
                 showResetNotice(notice, for: accountID)
             }
         }

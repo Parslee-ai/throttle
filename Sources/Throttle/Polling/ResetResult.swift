@@ -34,11 +34,15 @@ enum ResetResult: Equatable, Sendable {
 
     /// Whether the account's usage is read once right after this result, so
     /// the row shows the provider's own numbers: after a spend, after any
-    /// answer that means the count the row shows is out of date, and after a
-    /// 5xx, which a gateway can return after the provider already spent.
+    /// answer that means the count the row shows is out of date, after a
+    /// 5xx, which a gateway can return after the provider already spent, and
+    /// when the adapter needs a reading before it can spend. A blocked kind
+    /// sent nothing and its reason came from the current reading, so it
+    /// reads nothing.
     var wantsUsageRead: Bool {
         switch self {
-        case .outcome(.reset), .outcome(.noCredit), .outcome(.notAvailable), .outcome(.unexpected), .unexpected:
+        case .outcome(.reset), .outcome(.noCredit), .outcome(.notAvailable), .outcome(.unexpected), .unexpected,
+             .outcome(.needsFreshReading):
             return true
         case .providerError(let status):
             return status >= 500

@@ -19,10 +19,20 @@ protocol UsageProvider: Sendable {
     /// Called only from an explicit, confirmed user action, never from a poll,
     /// a timer, a wake, or a launch. `attemptID` is the idempotency key: every
     /// retry of the same attempt passes the same value, so a reset that went
-    /// through is never spent twice. Returns the provider's answer; throws
-    /// `UsageError` for anything that is not an answer. The caller re-reads
-    /// usage after `.reset`; the adapter never invents window numbers.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome
+    /// through is never spent twice. `choice` is the kind the owner picked,
+    /// `nil` when the row offered no kinds; the adapter resolves it to one of
+    /// its own grants and never spends a different kind in its place. An
+    /// adapter whose provider has one unnamed kind ignores it. Returns the
+    /// provider's answer, or `.blocked` / `.needsFreshReading` when nothing
+    /// was sent; throws `UsageError` for anything that is not an answer. The
+    /// caller re-reads usage after `.reset`; the adapter never invents window
+    /// numbers.
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome
 
     /// Exchanges a refresh token for a rotated credential.
     ///
@@ -40,7 +50,12 @@ extension UsageProvider {
     func accountDidSignIn(_ accountID: UUID) async {}
 
     /// A provider with no reset to spend.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome {
         throw ResetUnsupportedError()
     }
 }

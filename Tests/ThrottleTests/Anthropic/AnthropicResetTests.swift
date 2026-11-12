@@ -123,7 +123,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client)
         client.enqueue(status: 200, body: Data(#"{"result":"reset","resets_left":2,"cleared":["five_hour"]}"#.utf8))
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .reset)
 
         XCTAssertEqual(client.requests.count, 3)
@@ -155,8 +155,8 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"not_limited"}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"not_limited"}"#.utf8))
 
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: nil)
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 1)
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.usage }.count, 1)
     }
@@ -171,7 +171,7 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: try twoGrants())
         let provider = makeProvider(client)
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .reset)
         let status = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(status.planLabel, "max 20x")
@@ -181,7 +181,7 @@ final class AnthropicResetTests: XCTestCase {
     func testRateLimitedUsageReadDuringResetSendsNothingMore() async throws {
         let client = AnthropicMockHTTPClient(status: 429, headers: ["Retry-After": "120"])
         do {
-            _ = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected rateLimited")
         } catch UsageError.rateLimited(let retryAfter) {
             XCTAssertEqual(retryAfter, 120)
@@ -200,7 +200,7 @@ final class AnthropicResetTests: XCTestCase {
     func testGrantsWithNoResetsLeftAreNoCreditWithoutAPost() async throws {
         let body = try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":0,"usable_now":true},{"id":"grant_test_b","resets_left":0}]}"#)
         let client = AnthropicMockHTTPClient(status: 200, body: body)
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage])
     }
@@ -214,7 +214,7 @@ final class AnthropicResetTests: XCTestCase {
         _ = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(client.requests.count, 2)
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertEqual(client.requests.count, 2, "no usage read, no profile read, no POST")
     }
@@ -230,7 +230,7 @@ final class AnthropicResetTests: XCTestCase {
 
         let status = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(status.resetCreditsAvailable, 1)
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .nothingToReset)
         XCTAssertEqual(try jsonBody(try XCTUnwrap(posts(client).first))["grant_id"] as? String, "grant_test_idle")
         XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL])
@@ -238,7 +238,7 @@ final class AnthropicResetTests: XCTestCase {
 
     func testNoUsableGrantIsNoCreditWithoutAPost() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try AnthropicFixtures.data("anthropic-resets-no-grants"))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage])
     }
@@ -249,7 +249,7 @@ final class AnthropicResetTests: XCTestCase {
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try AnthropicFixtures.data("anthropic-limits")) as? [String: Any])
         root["cedar_ember"] = shapes["grant_id_path"]
         let client = AnthropicMockHTTPClient(status: 200, body: try JSONSerialization.data(withJSONObject: root))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertTrue(posts(client).isEmpty)
     }
@@ -275,7 +275,7 @@ final class AnthropicResetTests: XCTestCase {
     func testConsoleTokenIsNeedsLoginWithoutARequest() async {
         let client = AnthropicMockHTTPClient()
         do {
-            _ = try await makeProvider(client).useReset(account: account, credential: AccountCredential(accessToken: "t", scopes: ["user:profile"]), attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: account, credential: AccountCredential(accessToken: "t", scopes: ["user:profile"]), attemptID: attemptID, choice: nil)
             XCTFail("expected needsLogin")
         } catch UsageError.needsLogin {
             XCTAssertTrue(client.requests.isEmpty)
@@ -297,7 +297,7 @@ final class AnthropicResetTests: XCTestCase {
 
         clock.advance(by: 100)
         do {
-            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected rateLimited")
         } catch UsageError.rateLimited(let retryAfter) {
             XCTAssertEqual(try XCTUnwrap(retryAfter), 500, accuracy: 0.5)
@@ -316,7 +316,7 @@ final class AnthropicResetTests: XCTestCase {
 
         for _ in 0..<2 {
             do {
-                _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+                _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
                 XCTFail("expected rateLimited")
             } catch UsageError.rateLimited(let retryAfter) {
                 XCTAssertEqual(retryAfter, AnthropicProvider.profileRefusalHold)
@@ -329,7 +329,7 @@ final class AnthropicResetTests: XCTestCase {
     func testProfileWithoutOrganizationIsNotAvailableWithoutAPost() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try twoGrants())
         client.enqueue(status: 200, body: Data(#"{"account":{"email":"user@example.com"},"organization":{"organization_type":"claude_pro"}}"#.utf8))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(outcome, .notAvailable)
         XCTAssertTrue(posts(client).isEmpty)
     }
@@ -344,7 +344,7 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"organization":{"uuid":"\#(otherOrg)","organization_type":"claude_pro"}}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
 
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(posts(client).first?.url?.absoluteString, "https://api.anthropic.com/api/organizations/\(otherOrg)/reset_rate_limits")
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 2)
     }
@@ -356,9 +356,9 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client)
         for _ in 0..<3 { client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8)) }
 
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: nil)
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
         XCTAssertEqual(ids.count, 3)
         XCTAssertEqual(ids[0], ids[1])
@@ -392,12 +392,12 @@ final class AnthropicResetTests: XCTestCase {
         let provider = makeProvider(client)
         _ = try await provider.fetchStatus(account: account, credential: credential)
 
-        let first = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let first = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(first, .unexpected)
         let reread = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(reread.resetCreditsAvailable, 2)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: nil)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a", "grant_test_b"])
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
@@ -429,7 +429,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = makeProvider(client)
         _ = try await provider.fetchStatus(account: account, credential: credential)
         do {
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected a 503, got \(outcome)")
         } catch UsageError.httpStatus(let status) {
             XCTAssertEqual(status, 503)
@@ -453,9 +453,9 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
 
-        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(resent, .reset)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: nil)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a", "grant_test_b"])
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
@@ -477,7 +477,7 @@ final class AnthropicResetTests: XCTestCase {
         await provider.accountDidSignIn(account.id)
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8))
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a"])
         XCTAssertEqual(client.requests.map(\.url), [
@@ -502,11 +502,11 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
 
         do {
-            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected a 503")
         } catch UsageError.httpStatus(503) {}
         _ = try await provider.fetchStatus(account: account, credential: credential)
-        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(resent, .reset)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b", "grant_test_b"])
@@ -529,9 +529,9 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"unavailable"}"#.utf8))
 
         _ = try await provider.fetchStatus(account: account, credential: credential)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: second)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: second)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: second, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: second, choice: nil)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b", "grant_test_b", "grant_test_b"])
     }
@@ -546,7 +546,7 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: try bSelectedBody())
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
-        _ = try await relaunched.useReset(account: account, credential: credential, attemptID: attemptID)
+        _ = try await relaunched.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b"])
 
         let defaults = String(describing: UserDefaults.standard.dictionaryRepresentation())
@@ -585,7 +585,7 @@ final class AnthropicResetTests: XCTestCase {
             let client = AnthropicMockHTTPClient()
             let provider = try await primedProvider(client)
             client.enqueue(status: 200, body: Data(body.utf8))
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTAssertEqual(outcome, expected, body)
         }
     }
@@ -595,7 +595,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client, diagnostics: diagnostics)
         client.enqueue(status: status, body: body, headers: headers)
         do {
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected an error, got \(outcome)")
             return (UsageError.invalidResponse("none"), client)
         } catch {

@@ -30,7 +30,7 @@ final class OpenAIResetTests: XCTestCase {
 
     private func reset(_ responses: [HTTPResponse], diagnostics: Diagnostics? = nil) async throws -> ResetOutcome {
         try await makeProvider(OpenAIMockHTTPClient(responses: responses), diagnostics: diagnostics)
-            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
     }
 
     private func bodyObject(_ request: URLRequest) throws -> [String: Any] {
@@ -43,7 +43,7 @@ final class OpenAIResetTests: XCTestCase {
     func testRequestShape() async throws {
         let client = OpenAIMockHTTPClient(responses: [.json(#"{"code":"reset","windows_reset":1}"#)])
         let outcome = try await makeProvider(client)
-            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
 
         XCTAssertEqual(outcome, .reset)
         XCTAssertEqual(client.requests.count, 1, "exactly one request")
@@ -59,10 +59,24 @@ final class OpenAIResetTests: XCTestCase {
         XCTAssertEqual(client.maxBodyBytesSeen, [OpenAIProvider.maxResetBodyBytes])
     }
 
+    /// Codex has one unnamed kind: whatever choice is passed, the body is
+    /// the same single key.
+    func testBodyShapeIgnoresAnyChoice() async throws {
+        let choices: [ResetKind.Key?] = [nil] + ResetKind.Key.allCases.map { $0 }
+        for choice in choices {
+            let client = OpenAIMockHTTPClient(responses: [.json(#"{"code":"reset","windows_reset":1}"#)])
+            _ = try await makeProvider(client)
+                .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: choice)
+            let body = try bodyObject(try XCTUnwrap(client.requests.first))
+            XCTAssertEqual(Array(body.keys), ["redeem_request_id"], "\(String(describing: choice))")
+            XCTAssertEqual(body["redeem_request_id"] as? String, attemptID.uuidString.lowercased())
+        }
+    }
+
     func testBodyCarriesTheAttemptIDAndNoCreditID() async throws {
         let client = OpenAIMockHTTPClient(responses: [.json(#"{"code":"reset"}"#)])
         _ = try await makeProvider(client)
-            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            .useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
 
         let object = try bodyObject(try XCTUnwrap(client.requests.first))
         XCTAssertEqual(object["redeem_request_id"] as? String, attemptID.uuidString.lowercased())
@@ -73,7 +87,7 @@ final class OpenAIResetTests: XCTestCase {
     func testAccountIDHeaderOmittedWhenCredentialHasNone() async throws {
         let client = OpenAIMockHTTPClient(responses: [.json(#"{"code":"reset"}"#)])
         _ = try await makeProvider(client)
-            .useReset(account: OpenAIFixtures.account, credential: AccountCredential(accessToken: "tok"), attemptID: attemptID)
+            .useReset(account: OpenAIFixtures.account, credential: AccountCredential(accessToken: "tok"), attemptID: attemptID, choice: nil)
 
         let request = try XCTUnwrap(client.requests.first)
         XCTAssertNil(request.value(forHTTPHeaderField: "chatgpt-account-id"))
@@ -90,11 +104,11 @@ final class OpenAIResetTests: XCTestCase {
         let provider = makeProvider(client)
 
         do {
-            _ = try await provider.useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            _ = try await provider.useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected needsLogin")
         } catch UsageError.needsLogin {}
         let rotated = AccountCredential(accessToken: "rotated-access", refreshToken: "rotated-refresh", accountID: "acct-789")
-        let outcome = try await provider.useReset(account: OpenAIFixtures.account, credential: rotated, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: OpenAIFixtures.account, credential: rotated, attemptID: attemptID, choice: nil)
 
         XCTAssertEqual(outcome, .reset)
         XCTAssertEqual(client.requests.count, 2)
@@ -156,7 +170,7 @@ final class OpenAIResetTests: XCTestCase {
     func test401IsNeedsLoginWithNoRetry() async {
         let client = OpenAIMockHTTPClient(responses: [.json(401, #"{"detail":"Unauthorized"}"#)])
         do {
-            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected needsLogin")
         } catch UsageError.needsLogin {
         } catch {
@@ -245,7 +259,7 @@ final class OpenAIResetTests: XCTestCase {
     func testOversizedBodyIsTooLarge() async {
         let client = OpenAIMockHTTPClient(results: [.failure(UsageError.tooLarge)])
         do {
-            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected tooLarge")
         } catch UsageError.tooLarge {
         } catch {
@@ -258,7 +272,7 @@ final class OpenAIResetTests: XCTestCase {
         struct Boom: Error {}
         let client = OpenAIMockHTTPClient(results: [.failure(UsageError.transport(Boom()))])
         do {
-            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: OpenAIFixtures.account, credential: credential, attemptID: attemptID, choice: nil)
             XCTFail("expected transport")
         } catch UsageError.transport {
         } catch {

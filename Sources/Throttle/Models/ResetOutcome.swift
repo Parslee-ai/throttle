@@ -22,6 +22,13 @@ enum ResetOutcome: Equatable, Sendable {
     /// A well-formed answer carrying a result this build does not know. Never
     /// treated as success.
     case unexpected
+    /// Nothing was sent: the kind the owner picked cannot be spent right now,
+    /// for this reason.
+    case blocked(ResetKind.Reason)
+    /// Nothing was sent: the adapter holds no reading of the account to
+    /// choose a grant from. The caller reads the account once through its
+    /// normal path, and the owner picks again against fresh counts.
+    case needsFreshReading
 }
 
 /// Thrown by an adapter whose provider has no reset to spend.

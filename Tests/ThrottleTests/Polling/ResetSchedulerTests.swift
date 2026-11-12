@@ -335,6 +335,184 @@ final class ResetSchedulerTests: XCTestCase {
         f.openai.releaseResets()
         _ = await running.value
     }
+
+    // MARK: Reset kinds
+
+    private static let twoKinds = [
+        ResetKind(key: .full, label: "Full reset", count: 2),
+        ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1),
+    ]
+
+    func testPassesChoiceThroughUntouched() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.setResetKinds(Self.twoKinds)
+        await pollOnceThenStop(f)
+        f.anthropic.scriptResets([.answer(.nothingToReset)], for: account)
+
+        _ = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+        _ = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .full)
+        _ = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: nil)
+        _ = await f.scheduler.useReset(accountID: account.id, attemptID: UUID())
+
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.choice), [.modelRefill, .full, nil, nil])
+    }
+
+    func testPassesChoiceThroughOnTheResendAfterARefresh() async throws {
+        let f = makeFixture(refreshingTokens: true)
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.scriptResets([.fail(.needsLogin), .answer(.nothingToReset)], for: account)
+        let attemptID = UUID()
+
+        _ = await f.scheduler.useReset(accountID: account.id, attemptID: attemptID, choice: .modelRefill)
+
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.attemptID), [attemptID, attemptID])
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.choice), [.modelRefill, .modelRefill], "the resend keeps the kind")
+    }
+
+    /// A poll that lands between the click and the confirm, with a changed
+    /// kinds list that still holds the chosen kind, never redirects it.
+    func testPollDuringConfirmKeepsKind() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.setResetKinds(Self.twoKinds)
+        await pollOnceThenStop(f)
+        f.anthropic.setResetKinds([
+            ResetKind(key: .weekly, label: "7-day reset", count: 4),
+            ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1),
+        ])
+        await f.scheduler.refreshNow()
+        await f.waitForCycles(2)
+        let entry = try await f.requireEntry(account)
+        XCTAssertEqual(entry.status.resetKinds?.map(\.key), [.weekly, .modelRefill])
+        f.anthropic.scriptResets([.answer(.reset)], for: account)
+
+        let result = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+
+        XCTAssertEqual(result, .outcome(.reset))
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.choice), [.modelRefill])
+    }
+
+    func testTwoKindsAtOnceSendOneRequest() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.scriptResets([.waitThenAnswer(.reset)], for: account)
+
+        let first = Task { await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .full) }
+        await waitUntil("first kind sent") { f.anthropic.resetCount == 1 }
+        let second = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+
+        XCTAssertEqual(second, .alreadyRunning)
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.choice), [.full], "the second kind sent nothing")
+        f.anthropic.releaseResets()
+        let firstResult = await first.value
+        XCTAssertEqual(firstResult, .outcome(.reset))
+    }
+
+    func testNeedsFreshReadingReadsOnceWithoutTheSettleDelay() async throws {
+        let f = PollingFixture(postResetReadDelay: PollScheduler.postResetReadDelay)
+        fixtures.append(f)
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.setResetKinds(Self.twoKinds)
+        f.anthropic.scriptResets([.answer(.needsFreshReading)], for: account)
+
+        let reset = Task { await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .full) }
+        await waitUntil("the read, with no clock advanced: nothing was spent, so nothing settles") {
+            f.anthropic.fetchCount == 1
+        }
+        // Only frees a regressed scheduler sleeping on the settle delay.
+        await f.clock.advance(by: PollScheduler.postResetReadDelay)
+        let result = await reset.value
+
+        XCTAssertEqual(result, .outcome(.needsFreshReading))
+        XCTAssertEqual(f.anthropic.fetchCount, 1, "exactly one read")
+        let entry = try await f.requireEntry(account)
+        XCTAssertEqual(entry.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row then lists its kinds")
+    }
+
+    func testBlockedKindSendsNothingMoreAndReadsNothing() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.scriptResets([.answer(.blocked(.usableOnlyAtLimit))], for: account)
+
+        let result = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+
+        XCTAssertEqual(result, .outcome(.blocked(.usableOnlyAtLimit)))
+        XCTAssertEqual(f.anthropic.fetchCount, 0)
+    }
+
+    /// The scheduler side of a choice the adapter cannot resolve: the
+    /// adapter answers not-available and the account is read once.
+    func testUnresolvableChoiceEndsNotAvailableAndReadsOnce() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.scriptResets([.answer(.notAvailable)], for: account)
+
+        let result = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .session)
+
+        XCTAssertEqual(result, .outcome(.notAvailable))
+        XCTAssertEqual(f.anthropic.resetCalls.map(\.choice), [.session], "no other kind substituted")
+        XCTAssertEqual(f.anthropic.fetchCount, 1)
+    }
+
+    func testKindSpendRateLimitedLeavesThePollBackoffAlone() async throws {
+        let f = makeFixture()
+        let account = try await f.addAccount(.anthropic)
+        f.anthropic.setResetKinds(Self.twoKinds)
+        await pollOnceThenStop(f)
+        let before = try await f.requireEntry(account)
+        f.anthropic.scriptResets([.fail(.rateLimited(retryAfter: 600))], for: account)
+
+        let result = await f.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+
+        XCTAssertEqual(result, .rateLimited(until: f.clock.now().addingTimeInterval(600)))
+        let after = try await f.requireEntry(account)
+        XCTAssertEqual(after, before, "the row's reading, kinds and state are untouched")
+        await f.scheduler.refreshNow()
+        await f.waitForCycles(2)
+        XCTAssertEqual(f.anthropic.fetchCount, 2, "the next poll is not skipped: no horizon was armed")
+    }
+
+    func testPollCyclesRefreshNowAndWakeNeverSendAResetWithKinds() async throws {
+        let f = makeFixture()
+        try await f.addAccount(.anthropic)
+        try await f.addAccount(.openai)
+        f.anthropic.setResetKinds(Self.twoKinds)
+        f.openai.setResetCredits(2)
+
+        await f.scheduler.start()
+        await f.waitForCycles(1)
+        for cycle in 2...4 {
+            await f.clock.advance(by: 300)
+            await f.waitForCycles(cycle)
+        }
+        await f.scheduler.refreshNow()
+        await f.waitForCycles(5)
+        await f.scheduler.handleWillSleep()
+        await f.scheduler.handleDidWake()
+        await f.waitForCycles(6)
+
+        XCTAssertEqual(f.totalFetches, 12)
+        XCTAssertEqual(totalResets(f), 0, "no cycle, refresh or wake spends any kind")
+    }
+
+    func testUnsupportedProviderDefaultAnswersUnsupportedForAnyChoice() async throws {
+        let account = Account(provider: .openai, email: "fixture-unsupported", sortIndex: 0)
+        let choices: [ResetKind.Key?] = [nil] + ResetKind.Key.allCases.map { $0 }
+        for choice in choices {
+            do {
+                _ = try await ReadOnlyProvider().useReset(
+                    account: account,
+                    credential: AccountCredential(accessToken: "t"),
+                    attemptID: UUID(),
+                    choice: choice
+                )
+                XCTFail("\(String(describing: choice)) should be unsupported")
+            } catch {
+                XCTAssertTrue(error is ResetUnsupportedError, "\(error)")
+            }
+        }
+    }
 }
 
 /// A provider that implements no reset, so it gets the protocol's default.

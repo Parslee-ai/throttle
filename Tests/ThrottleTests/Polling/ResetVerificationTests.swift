@@ -249,9 +249,9 @@ private final class IdentifierHoldingProvider: UsageProvider, @unchecked Sendabl
         try await inner.refresh(credential: credential)
     }
 
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID, choice: ResetKind.Key?) async throws -> ResetOutcome {
         let body = #"{"organization":"\#(orgUUID)","grant_id":"\#(grantID)","request_id":"\#(attemptID.uuidString.lowercased())"}"#
         lock.withLock { bodies.append(body) }
-        return try await inner.useReset(account: account, credential: credential, attemptID: attemptID)
+        return try await inner.useReset(account: account, credential: credential, attemptID: attemptID, choice: choice)
     }
 }

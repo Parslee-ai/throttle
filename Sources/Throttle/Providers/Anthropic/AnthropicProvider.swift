@@ -282,8 +282,14 @@ struct AnthropicProvider: UsageProvider {
     /// profile read (when the organization id is not known and the profile is
     /// not on hold), then one POST. It never refreshes the token itself: a 401
     /// is thrown as `needsLogin` for the scheduler's serialized refresh and
-    /// resend with the same `attemptID`.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    /// resend with the same `attemptID`. `choice` is not resolved yet: the
+    /// grant is still the one the provider recommends.
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome {
         if Self.isConsoleToken(credential) {
             throw UsageError.needsLogin
         }

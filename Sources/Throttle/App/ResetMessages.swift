@@ -8,6 +8,7 @@ enum ResetMessages {
     static let nothingToReset = "Nothing to reset right now — your reset was not used"
     static let noResets = "No resets available"
     static let notAvailable = "Resets aren't available for this account right now"
+    static let needsFreshReading = "Getting the latest reset counts — try again in a moment"
     /// Longest message a row ever shows.
     static let maxLength = 300
     /// How long the success note stays before it fades.
@@ -15,8 +16,9 @@ enum ResetMessages {
 
     /// The notice for a finished attempt, or `nil` when the row's own state
     /// already says everything (a needed sign-in) or nothing happened (a
-    /// second click during a run).
-    static func notice(for result: ResetResult, providerName: String, now: Date) -> ResetNotice? {
+    /// second click during a run). `kindLabel` is the label of the kind the
+    /// owner picked, when there was one.
+    static func notice(for result: ResetResult, providerName: String, now: Date, kindLabel: String? = nil) -> ResetNotice? {
         switch result {
         case .outcome(.reset):
             return ResetNotice(success, kind: .success)
@@ -29,6 +31,10 @@ enum ResetMessages {
             return failure("Reset on cooldown until \(time(until, now: now))")
         case .outcome(.notAvailable), .unsupported:
             return failure(notAvailable)
+        case .outcome(.blocked(let reason)):
+            return failure(text(for: reason, kindLabel: kindLabel, now: now))
+        case .outcome(.needsFreshReading):
+            return failure(needsFreshReading)
         case .outcome(.unexpected), .unexpected:
             return failure("Unexpected answer from \(providerName)")
         case .rateLimited(let until):
@@ -52,27 +58,40 @@ enum ResetMessages {
         }
     }
 
-    /// Redacted first, so a token cut in half by the cap cannot slip past
-    /// the redactor; then every control character (newlines included)
-    /// becomes a space, runs of spaces collapse, and the result is capped.
-    static func sanitized(_ raw: String) -> String {
-        let redacted = Redactor.redact(raw)
-        var out = ""
-        var lastWasSpace = false
-        for scalar in redacted.unicodeScalars {
-            let isSpace = CharacterSet.controlCharacters.contains(scalar)
-                || CharacterSet.whitespacesAndNewlines.contains(scalar)
-            if isSpace {
-                if !lastWasSpace { out.unicodeScalars.append(" ") }
-                lastWasSpace = true
-            } else {
-                out.unicodeScalars.append(scalar)
-                lastWasSpace = false
-            }
+    /// The plain reason a kind cannot be spent right now. A model refill's
+    /// reason names the model, which is its kind label without the trailing
+    /// "reset".
+    static func text(for reason: ResetKind.Reason, kindLabel: String?, now: Date) -> String {
+        switch reason {
+        case .cooldown(let until):
+            guard let until, until > now else { return "On cooldown" }
+            return "On cooldown until \(time(until, now: now))"
+        case .noneLeft:
+            return noResets
+        case .notStarted(let startsAt):
+            return "Starts \(time(startsAt, now: now))"
+        case .paused:
+            return "Paused"
+        case .notUsableNow:
+            return "Not usable right now"
+        case .usableOnlyAtLimit:
+            return "Usable once you reach a limit"
+        case .nothingToGiveBack:
+            let model = modelName(fromKindLabel: kindLabel)
+            return model.isEmpty ? "No usage to give back" : "No \(model) usage to give back"
         }
-        let trimmed = out.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count > maxLength else { return trimmed }
-        return String(trimmed.prefix(maxLength - 1)) + "…"
+    }
+
+    private static func modelName(fromKindLabel label: String?) -> String {
+        guard let label else { return "" }
+        let suffix = " reset"
+        let trimmed = label.lowercased().hasSuffix(suffix) ? String(label.dropLast(suffix.count)) : label
+        return trimmed.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// One line, redacted, capped at `maxLength`.
+    static func sanitized(_ raw: String) -> String {
+        Redactor.oneLine(raw, maxLength: maxLength)
     }
 
     private static func failure(_ text: String) -> ResetNotice {
@@ -99,17 +118,39 @@ enum ResetMessages {
 /// one. Once an attempt has been ambiguous, only a definitive answer ends it:
 /// a later refusal says the retry was not processed, not that the earlier
 /// send was not.
+///
+/// An attempt also keeps the kind it was started for. Its id is an
+/// idempotency key only for that kind, so a click on another kind while it
+/// is unfinished gets no id and sends nothing.
 struct ResetAttempts {
-    private var pending: [UUID: UUID] = [:]
+    private struct Pending {
+        let id: UUID
+        let choice: ResetKind.Key?
+    }
+
+    private var pending: [UUID: Pending] = [:]
     /// Accounts whose pending attempt has had an ambiguous result.
     private var ambiguous: Set<UUID> = []
 
     /// The id for this account's next request: the unfinished attempt's, or
     /// a fresh one.
     mutating func attemptID(for accountID: UUID) -> UUID {
-        if let id = pending[accountID] { return id }
+        if let attempt = pending[accountID] { return attempt.id }
+        return start(accountID, choice: nil)
+    }
+
+    /// The id for a request spending `choice`: the unfinished attempt's when
+    /// it was started for the same kind, a fresh one when nothing is
+    /// unfinished, and `nil`, meaning send nothing, while an attempt for
+    /// another kind is unfinished.
+    mutating func attemptID(for accountID: UUID, choice: ResetKind.Key?) -> UUID? {
+        guard let attempt = pending[accountID] else { return start(accountID, choice: choice) }
+        return attempt.choice == choice ? attempt.id : nil
+    }
+
+    private mutating func start(_ accountID: UUID, choice: ResetKind.Key?) -> UUID {
         let id = UUID()
-        pending[accountID] = id
+        pending[accountID] = Pending(id: id, choice: choice)
         return id
     }
 
@@ -135,7 +176,8 @@ struct ResetAttempts {
     enum Ending: Equatable {
         /// The provider said what happened to this attempt.
         case definitive
-        /// The request was turned away before it was processed.
+        /// The request was turned away before it was processed, or the
+        /// adapter sent nothing (the kind is blocked, a reading is needed).
         case refused
         /// The reset may or may not have been spent.
         case ambiguous
@@ -148,7 +190,7 @@ struct ResetAttempts {
         case .outcome(.reset), .outcome(.nothingToReset), .outcome(.noCredit),
              .outcome(.cooldown), .outcome(.notAvailable), .unsupported:
             return .definitive
-        case .needsLogin, .forbidden, .rateLimited:
+        case .needsLogin, .forbidden, .rateLimited, .outcome(.blocked), .outcome(.needsFreshReading):
             return .refused
         case .providerError(let status):
             return (300..<500).contains(status) ? .refused : .ambiguous

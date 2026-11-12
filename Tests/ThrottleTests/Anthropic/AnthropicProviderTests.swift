@@ -59,7 +59,7 @@ final class AnthropicProviderTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
         let provider = makeProvider(client)
         _ = try await provider.fetchStatus(account: account, credential: credential)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: nil)
         XCTAssertEqual(client.requests.count, 3)
         XCTAssertEqual(client.requests.map(\.httpMethod), ["GET", "GET", "POST"])
         return client.requests
