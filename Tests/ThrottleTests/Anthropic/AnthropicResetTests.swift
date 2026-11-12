@@ -55,7 +55,7 @@ final class AnthropicResetTests: XCTestCase {
 
     // MARK: Reading the count
 
-    func testUsageQueryItemsAreExactAndTheUserAgentIsThrottles() async throws {
+    func testUsageQueryItemsAreExactAndTheClientNameIsClaudeCodes() async throws {
         let client = AnthropicMockHTTPClient()
         _ = try await primedProvider(client)
         let usage = try XCTUnwrap(client.requests.first)
@@ -68,8 +68,7 @@ final class AnthropicResetTests: XCTestCase {
             URLQueryItem(name: "cedar_ember", value: "1"),
         ])
         let agent = try XCTUnwrap(usage.value(forHTTPHeaderField: "User-Agent"))
-        XCTAssertTrue(agent.hasPrefix("throttle/"), agent)
-        XCTAssertFalse(agent.lowercased().contains("claude"), "never Claude Code's user agent")
+        XCTAssertEqual(agent, "claude-cli/2.1.322 (external, cli)", "the provider reports resets to the Claude Code client only")
         XCTAssertNil(usage.value(forHTTPHeaderField: "x-app"))
     }
 

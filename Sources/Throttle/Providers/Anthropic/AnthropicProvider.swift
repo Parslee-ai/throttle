@@ -464,7 +464,7 @@ struct AnthropicProvider: UsageProvider {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.tokenUserAgent, forHTTPHeaderField: "User-Agent")
         let body: [String: String] = [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
@@ -480,7 +480,7 @@ struct AnthropicProvider: UsageProvider {
         request.httpShouldHandleCookies = false
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.tokenUserAgent, forHTTPHeaderField: "User-Agent")
         let fields: [(String, String)] = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken),
@@ -560,7 +560,7 @@ struct AnthropicProvider: UsageProvider {
         request.setValue(AnthropicEndpoints.betaHeader, forHTTPHeaderField: "anthropic-beta")
         request.setValue(AnthropicEndpoints.apiVersion, forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.accountUserAgent, forHTTPHeaderField: "User-Agent")
         return request
     }
 

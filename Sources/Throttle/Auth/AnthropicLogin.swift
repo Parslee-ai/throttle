@@ -136,12 +136,12 @@ struct AnthropicLogin: OAuthLogin {
     private func exchange(code: String, state: String, redirectURI: String, verifier: String) async throws -> AccountCredential {
         let fields = Self.exchangeFields(code: code, state: state, redirectURI: redirectURI, verifier: verifier)
         var response = try await OAuthFlow.send(
-            OAuthFlow.formRequest(url: Self.tokenURL, fields: fields, userAgent: AnthropicEndpoints.userAgent),
+            OAuthFlow.formRequest(url: Self.tokenURL, fields: fields, userAgent: AnthropicEndpoints.tokenUserAgent),
             via: client
         )
         if response.statusCode == 400 {
             response = try await OAuthFlow.send(
-                OAuthFlow.formRequest(url: Self.tokenRetryURL, fields: fields, userAgent: AnthropicEndpoints.userAgent),
+                OAuthFlow.formRequest(url: Self.tokenRetryURL, fields: fields, userAgent: AnthropicEndpoints.tokenUserAgent),
                 via: client
             )
         }

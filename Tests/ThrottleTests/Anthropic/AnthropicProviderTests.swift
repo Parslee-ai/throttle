@@ -39,7 +39,7 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent")?.hasPrefix("throttle/"), true)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-cli/2.1.322 (external, cli)")
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
         XCTAssertFalse(request.httpShouldHandleCookies)
         XCTAssertEqual(client.maxBodyLimits, [256 * 1024, 256 * 1024])
@@ -47,6 +47,68 @@ final class AnthropicProviderTests: XCTestCase {
 
     func testProviderCaseIsAnthropic() {
         XCTAssertEqual(makeProvider(AnthropicMockHTTPClient()).provider, .anthropic)
+    }
+
+    // MARK: Client name (ISC-425 to ISC-428)
+
+    /// The usage read, the profile read and the reset request: the three
+    /// account requests, in the order a poll and then a click send them.
+    private func threeAccountRequests() async throws -> [URLRequest] {
+        let client = AnthropicMockHTTPClient(status: 200, body: try AnthropicFixtures.data("anthropic-resets-two-grants"))
+        client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
+        client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
+        let provider = makeProvider(client)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        XCTAssertEqual(client.requests.count, 3)
+        XCTAssertEqual(client.requests.map(\.httpMethod), ["GET", "GET", "POST"])
+        return client.requests
+    }
+
+    func testClientNameIsClaudeCodesOnUsageProfileAndReset() async throws {
+        XCTAssertEqual(AnthropicEndpoints.accountUserAgent, "claude-cli/\(AnthropicEndpoints.claudeCodeVersion) (external, cli)")
+        for request in try await threeAccountRequests() {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-cli/2.1.322 (external, cli)", "\(request.url!)")
+        }
+    }
+
+    /// 0.5.1 sent exactly these headers; only the User-Agent value changed.
+    func testHeadersUnchangedApartFromTheClientName() async throws {
+        let requests = try await threeAccountRequests()
+        let read: Set<String> = ["Authorization", "anthropic-beta", "anthropic-version", "Accept", "User-Agent"]
+        XCTAssertEqual(Set((requests[0].allHTTPHeaderFields ?? [:]).keys), read)
+        XCTAssertEqual(Set((requests[1].allHTTPHeaderFields ?? [:]).keys), read)
+        XCTAssertEqual(Set((requests[2].allHTTPHeaderFields ?? [:]).keys), read.union(["Content-Type"]))
+        for request in requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertNil(request.value(forHTTPHeaderField: "x-app"))
+        }
+    }
+
+    func testUsageQueryItemsUnchanged() async throws {
+        let usage = try await threeAccountRequests()[0]
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(usage.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems, [
+            URLQueryItem(name: "at_wall", value: "1"),
+            URLQueryItem(name: "skip_spend", value: "1"),
+            URLQueryItem(name: "cedar_ember", value: "1"),
+        ])
+    }
+
+    /// The token refresh keeps Throttle's own name on both endpoints.
+    func testRefreshRequestsKeepThrottlesOwnName() async throws {
+        let client = AnthropicMockHTTPClient()
+        client.enqueue(status: 400, body: Data(#"{"error":"invalid_request"}"#.utf8))
+        client.enqueue(status: 200, body: Data(#"{"access_token":"\#(AnthropicSampleSecret.rotatedAccess)","expires_in":3600}"#.utf8))
+        _ = try await makeProvider(client).refresh(credential: credential)
+        XCTAssertEqual(client.requests.count, 2)
+        for request in client.requests {
+            let agent = try XCTUnwrap(request.value(forHTTPHeaderField: "User-Agent"))
+            XCTAssertTrue(agent.hasPrefix("throttle/"), agent)
+            XCTAssertEqual(agent, AnthropicEndpoints.tokenUserAgent)
+        }
     }
 
     // MARK: Success

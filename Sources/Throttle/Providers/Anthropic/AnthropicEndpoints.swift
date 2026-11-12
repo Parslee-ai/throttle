@@ -42,9 +42,20 @@ enum AnthropicEndpoints {
     /// Largest response body the adapter will read.
     static let maxBodyBytes = 256 * 1024
 
-    /// `throttle/<CFBundleShortVersionString>`, falling back to `dev` when the
-    /// running bundle has no marketing version (as under the test runner).
-    static var userAgent: String {
+    /// The Claude Code release whose client name the account requests carry.
+    /// The provider reports banked resets only to a current Claude Code
+    /// client and answers any other name as not eligible (ISA D-91), so this
+    /// is bumped by a Throttle release when it falls out of date.
+    static let claudeCodeVersion = "2.1.322"
+
+    /// The client name on the usage read, the profile read and the reset
+    /// request. Only the name is copied; every other header stays Throttle's.
+    static let accountUserAgent = "claude-cli/\(claudeCodeVersion) (external, cli)"
+
+    /// Throttle's own name, `throttle/<CFBundleShortVersionString>`, sent on
+    /// the token exchange and refresh. Falls back to `dev` when the running
+    /// bundle has no marketing version (as under the test runner).
+    static var tokenUserAgent: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         return "throttle/\(version ?? "dev")"
     }
