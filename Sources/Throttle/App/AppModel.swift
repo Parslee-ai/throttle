@@ -95,6 +95,9 @@ final class AppModel {
     /// The latest reset message per account. Memory only: it never outlives
     /// the process.
     private(set) var resetNotices: [UUID: ResetNotice] = [:]
+    /// What each row may offer while an earlier attempt on its account is
+    /// unsettled. No entry means no restriction.
+    private(set) var resetGates: [UUID: ResetGate] = [:]
 
     let settings: AppSettings
     let rotation: RotationController
@@ -334,7 +337,10 @@ final class AppModel {
     /// `choice` is the kind the user picked, `nil` on a row with no kinds.
     /// It goes to the adapter untouched. While an earlier attempt for another
     /// kind is unfinished, nothing is sent and that attempt is left as it is.
-    func useReset(_ account: Account, choice: ResetKind.Key? = nil) {
+    ///
+    /// `retrying` is true when the user confirmed a retry of an unsettled
+    /// attempt, and false for a new one.
+    func useReset(_ account: Account, choice: ResetKind.Key? = nil, retrying: Bool = false) {
         guard !resetsInFlight.contains(account.id) else { return }
         guard let count = statuses[account.id]?.status.resetCreditsAvailable, count > 0 else {
             showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: account.id)
