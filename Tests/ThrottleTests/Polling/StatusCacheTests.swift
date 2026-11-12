@@ -143,4 +143,58 @@ final class StatusCacheTests: XCTestCase {
         let second = await iterator.next()
         XCTAssertEqual(second?[account.id]?.status.windows.first?.usedPercent, 50)
     }
+
+    // MARK: Reset kinds (ISC-488)
+
+    private let kinds = [
+        ResetKind(key: .full, label: "Full reset", count: 2),
+        ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1, reason: .usableOnlyAtLimit),
+    ]
+
+    /// A failed attempt, a backoff skip of either kind, a skip with no entry
+    /// yet, and a state change: every place the cache rebuilds a status.
+    func testKindsSurviveRebuildAtEverySite() async {
+        let now = clock.now()
+        let withKinds = AccountStatus(
+            accountID: account.id, provider: .anthropic, email: account.email,
+            windows: [UsageWindow(key: "7d", label: "Weekly", usedPercent: 1, resetsAt: nil, durationSeconds: 604_800)],
+            fetchedAt: now, state: .ok, planLabel: "max", resetKinds: kinds
+        )
+        await cache.recordSuccess(withKinds, at: now)
+
+        await cache.recordFailure(account: account, state: .error("boom"), error: "boom", at: now.addingTimeInterval(1), markStale: true)
+        var entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetKinds, kinds, "failed attempt")
+        XCTAssertEqual(entry?.status.resetCreditsAvailable, 3)
+
+        await cache.recordSkipped(account: account, until: now.addingTimeInterval(600), rateLimited: true, at: now.addingTimeInterval(2))
+        entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetKinds, kinds, "rate-limit skip, which replaces the state")
+        XCTAssertEqual(entry?.status.state, .rateLimited(until: now.addingTimeInterval(600)))
+
+        await cache.recordSkipped(account: account, until: now.addingTimeInterval(900), rateLimited: false, at: now.addingTimeInterval(3))
+        entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetKinds, kinds, "error-backoff skip")
+
+        await cache.recordFailure(account: account, state: .needsLogin, error: nil, at: now.addingTimeInterval(4), markStale: true)
+        entry = await cache.entry(for: account.id)
+        XCTAssertEqual(entry?.status.resetKinds, kinds, "state change to needs-login")
+        XCTAssertEqual(entry?.status.resetCreditsAvailable, 3)
+    }
+
+    func testKindsReplacedByTheNextSuccess() async {
+        let now = clock.now()
+        let windows = [UsageWindow(key: "7d", label: "Weekly", usedPercent: 1, resetsAt: nil, durationSeconds: 604_800)]
+        await cache.recordSuccess(AccountStatus(
+            accountID: account.id, provider: .anthropic, email: account.email,
+            windows: windows, fetchedAt: now, state: .ok, resetKinds: kinds
+        ), at: now)
+        await cache.recordSuccess(AccountStatus(
+            accountID: account.id, provider: .anthropic, email: account.email,
+            windows: windows, fetchedAt: now.addingTimeInterval(1), state: .ok, resetCreditsAvailable: 0
+        ), at: now.addingTimeInterval(1))
+        let entry = await cache.entry(for: account.id)
+        XCTAssertNil(entry?.status.resetKinds, "a reading with no kinds clears them; nothing is carried over")
+        XCTAssertEqual(entry?.status.resetCreditsAvailable, 0)
+    }
 }

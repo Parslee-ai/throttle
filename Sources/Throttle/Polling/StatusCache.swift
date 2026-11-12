@@ -108,10 +108,11 @@ actor StatusCache {
         publish()
     }
 
-    /// A failed attempt. The last good windows and their `fetchedAt` survive;
-    /// only `state`, `lastError`, staleness, and the next-attempt horizon
-    /// change. `markStale` is false for a rate limit, where the data is as good
-    /// as it was a moment ago and only its age should dim it.
+    /// A failed attempt. The last good windows, their `fetchedAt`, the plan
+    /// and the reset counts and kinds survive; only `state`, `lastError`,
+    /// staleness, and the next-attempt horizon change. `markStale` is false
+    /// for a rate limit, where the data is as good as it was a moment ago and
+    /// only its age should dim it.
     func recordFailure(
         account: Account,
         state: AccountState,
@@ -131,7 +132,8 @@ actor StatusCache {
             fetchedAt: previous?.status.fetchedAt ?? attempt,
             state: state,
             planLabel: previous?.status.planLabel,
-            resetCreditsAvailable: previous?.status.resetCreditsAvailable
+            resetCreditsAvailable: previous?.status.resetCreditsAvailable,
+            resetKinds: previous?.status.resetKinds
         )
         entries[account.id] = CachedStatus(
             status: status,
@@ -224,7 +226,8 @@ actor StatusCache {
             fetchedAt: status.fetchedAt,
             state: state,
             planLabel: status.planLabel,
-            resetCreditsAvailable: status.resetCreditsAvailable
+            resetCreditsAvailable: status.resetCreditsAvailable,
+            resetKinds: status.resetKinds
         )
     }
 }

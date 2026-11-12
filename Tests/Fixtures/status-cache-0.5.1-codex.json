@@ -1,0 +1,52 @@
+{
+  "entries" : {
+    "44444444-4444-4444-8444-444444444444" : {
+      "isStale" : false,
+      "lastAttempt" : "2026-10-26T07:33:20Z",
+      "lastGoodWindows" : [
+        {
+          "durationSeconds" : 604800,
+          "key" : "7d",
+          "label" : "Weekly",
+          "resetsAt" : "2026-11-01T02:26:40Z",
+          "usedPercent" : 63
+        },
+        {
+          "durationSeconds" : 604800,
+          "key" : "lane:spark-7d",
+          "label" : "Spark Weekly",
+          "usedPercent" : 4
+        }
+      ],
+      "status" : {
+        "accountID" : "44444444-4444-4444-8444-444444444444",
+        "email" : "fixture-codex-two",
+        "fetchedAt" : "2026-10-26T07:33:20Z",
+        "planLabel" : "plus",
+        "provider" : "openai",
+        "resetCreditsAvailable" : 1,
+        "state" : {
+          "ok" : {
+
+          }
+        },
+        "windows" : [
+          {
+            "durationSeconds" : 604800,
+            "key" : "7d",
+            "label" : "Weekly",
+            "resetsAt" : "2026-11-01T02:26:40Z",
+            "usedPercent" : 63
+          },
+          {
+            "durationSeconds" : 604800,
+            "key" : "lane:spark-7d",
+            "label" : "Spark Weekly",
+            "usedPercent" : 4
+          }
+        ]
+      }
+    }
+  },
+  "version" : 1
+}

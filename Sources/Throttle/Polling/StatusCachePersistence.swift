@@ -5,7 +5,8 @@ import os
 /// the previous numbers, dimmed by age, instead of blank rows (ISC-90).
 ///
 /// What lands in `status-cache.json` is `CachedStatus` only: account id,
-/// provider, email, windows, timestamps, state, plan badge. No credential type
+/// provider, email, windows, timestamps, state, plan badge, reset counts and
+/// reset kinds (label, count, reason, kind key; never a grant id). No credential type
 /// is reachable from `CachedStatus`, so no token can be written here; the test
 /// suite asserts the encoded keys against a token/secret pattern as well.
 ///

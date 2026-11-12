@@ -1,0 +1,124 @@
+{
+  "entries" : {
+    "11111111-1111-4111-8111-111111111111" : {
+      "isStale" : false,
+      "lastAttempt" : "2026-10-26T07:33:20Z",
+      "lastGoodWindows" : [
+        {
+          "durationSeconds" : 604800,
+          "key" : "7d",
+          "label" : "Weekly",
+          "resetsAt" : "2026-10-28T15:06:40Z",
+          "usedPercent" : 41
+        },
+        {
+          "durationSeconds" : 604800,
+          "key" : "scoped:Testmodel",
+          "label" : "Testmodel",
+          "resetsAt" : "2026-10-29T18:53:20Z",
+          "usedPercent" : 100
+        }
+      ],
+      "status" : {
+        "accountID" : "11111111-1111-4111-8111-111111111111",
+        "email" : "fixture-claude",
+        "fetchedAt" : "2026-10-26T07:33:20Z",
+        "planLabel" : "max 20x",
+        "provider" : "anthropic",
+        "resetCreditsAvailable" : 3,
+        "state" : {
+          "ok" : {
+
+          }
+        },
+        "windows" : [
+          {
+            "durationSeconds" : 604800,
+            "key" : "7d",
+            "label" : "Weekly",
+            "resetsAt" : "2026-10-28T15:06:40Z",
+            "usedPercent" : 41
+          },
+          {
+            "durationSeconds" : 604800,
+            "key" : "scoped:Testmodel",
+            "label" : "Testmodel",
+            "resetsAt" : "2026-10-29T18:53:20Z",
+            "usedPercent" : 100
+          }
+        ]
+      }
+    },
+    "22222222-2222-4222-8222-222222222222" : {
+      "isStale" : false,
+      "lastAttempt" : "2026-10-26T07:33:20Z",
+      "lastError" : "Rate limited by Codex",
+      "lastGoodWindows" : [
+        {
+          "durationSeconds" : 604800,
+          "key" : "7d",
+          "label" : "Weekly",
+          "resetsAt" : "2026-10-30T22:40:00Z",
+          "usedPercent" : 12.5
+        }
+      ],
+      "nextAttemptAt" : "2026-10-26T07:48:20Z",
+      "status" : {
+        "accountID" : "22222222-2222-4222-8222-222222222222",
+        "email" : "fixture-codex",
+        "fetchedAt" : "2026-10-26T07:32:20Z",
+        "planLabel" : "pro",
+        "provider" : "openai",
+        "resetCreditsAvailable" : 2,
+        "state" : {
+          "rateLimited" : {
+            "until" : "2026-10-26T07:48:20Z"
+          }
+        },
+        "windows" : [
+          {
+            "durationSeconds" : 604800,
+            "key" : "7d",
+            "label" : "Weekly",
+            "resetsAt" : "2026-10-30T22:40:00Z",
+            "usedPercent" : 12.5
+          }
+        ]
+      }
+    },
+    "33333333-3333-4333-8333-333333333333" : {
+      "isStale" : true,
+      "lastAttempt" : "2026-10-26T07:33:20Z",
+      "lastError" : "Timed out after 15 s",
+      "lastGoodWindows" : [
+        {
+          "durationSeconds" : 604800,
+          "key" : "7d",
+          "label" : "Weekly",
+          "usedPercent" : 0
+        }
+      ],
+      "nextAttemptAt" : "2026-10-26T07:35:20Z",
+      "status" : {
+        "accountID" : "33333333-3333-4333-8333-333333333333",
+        "email" : "fixture-claude-two",
+        "fetchedAt" : "2026-10-26T06:33:20Z",
+        "provider" : "anthropic",
+        "state" : {
+          "error" : {
+            "_0" : "Timed out after 15 s"
+          }
+        },
+        "windows" : [
+          {
+            "durationSeconds" : 604800,
+            "key" : "7d",
+            "label" : "Weekly",
+            "usedPercent" : 0
+          }
+        ]
+      }
+    }
+  },
+  "version" : 1
+}

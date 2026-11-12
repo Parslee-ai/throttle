@@ -30,4 +30,28 @@ enum Redactor {
         }
         return out
     }
+
+    /// Redacted first, so a token cut in half by the cap cannot slip past
+    /// the redactor; then every control character (newlines included)
+    /// becomes a space, runs of spaces collapse, and the result is capped at
+    /// `maxLength` characters, the last one an ellipsis when it was cut.
+    static func oneLine(_ raw: String, maxLength: Int) -> String {
+        let redacted = redact(raw)
+        var out = ""
+        var lastWasSpace = false
+        for scalar in redacted.unicodeScalars {
+            let isSpace = CharacterSet.controlCharacters.contains(scalar)
+                || CharacterSet.whitespacesAndNewlines.contains(scalar)
+            if isSpace {
+                if !lastWasSpace { out.unicodeScalars.append(" ") }
+                lastWasSpace = true
+            } else {
+                out.unicodeScalars.append(scalar)
+                lastWasSpace = false
+            }
+        }
+        let trimmed = out.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength - 1)) + "…"
+    }
 }
