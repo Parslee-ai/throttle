@@ -255,10 +255,23 @@ struct AccountRow: View {
 
     private var columns: [Column] {
         var result = primaryWindows.map(Column.window)
-        if let credits = cached?.status.resetCreditsAvailable {
+        if let credits = resetCount {
             result.append(.resetCredits(credits))
         }
         return result
+    }
+
+    private var resetCount: Int? {
+        Self.resetCount(credits: cached?.status.resetCreditsAvailable, gate: resetGate)
+    }
+
+    /// The count the resets column shows, `nil` for no column. A pending
+    /// retry keeps the column even when the latest reading reports no
+    /// resets at all, because the reset it retries may already be spent.
+    static func resetCount(credits: Int?, gate: ResetGate?) -> Int? {
+        if let credits { return credits }
+        if case .retryOnly(_?, _) = gate { return 0 }
+        return nil
     }
 
     @ViewBuilder
@@ -406,7 +419,7 @@ struct AccountRow: View {
         if case .rateLimited = cached?.status.state {
             Button("Retry status check now", action: actions.retryStatusCheck)
         }
-        if let count = cached?.status.resetCreditsAvailable {
+        if let count = resetCount {
             Button("Use reset…", action: actions.useReset)
                 .disabled(isResetting || resetOffer(count: count).disabledReason != nil)
         }

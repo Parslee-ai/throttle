@@ -17,7 +17,14 @@ struct ResetOffer {
     let now: Date
 
     init(count: Int, kinds: [ResetKind]?, dimmed: Bool, gate: ResetGate?, now: Date) {
-        self.kinds = Self.merged(kinds ?? [])
+        var listed = Self.merged(kinds ?? [])
+        // A pending retry stays offered when the latest reading lists no kind
+        // at all, so the row keeps a line for it to sit on, at the 0 the
+        // reading shows.
+        if listed.isEmpty, case .retryOnly(let kind?, let label) = gate {
+            listed = [ResetKind(key: kind, label: label ?? ResetKind.fallbackLabel, count: 0)]
+        }
+        self.kinds = listed
         self.count = count
         self.dimmed = dimmed
         self.gate = gate

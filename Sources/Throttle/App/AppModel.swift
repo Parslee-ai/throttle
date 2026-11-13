@@ -349,6 +349,30 @@ final class AppModel {
 
     // MARK: Banked reset
 
+    /// What the reset confirmation calls when the owner confirms. The choice
+    /// is checked against the account as it is now, not as it was when the
+    /// card opened (`ResetConfirmation.outcome`): a kind that dropped to 0,
+    /// vanished or became blocked sends nothing and the row says why, and a
+    /// retry whose attempt has since ended sends nothing at all.
+    func confirmReset(_ account: Account, choice: ResetConfirmation.Choice) {
+        let outcome = ResetConfirmation.outcome(
+            of: choice,
+            status: statuses[account.id]?.status,
+            gate: resetGates[account.id]
+        )
+        switch outcome {
+        case .send(let kind, let retrying):
+            useReset(account, choice: kind, retrying: retrying)
+        case .hold(_, let label):
+            guard let notice = ResetConfirmation.heldNotice(
+                for: outcome,
+                providerName: account.provider.displayName,
+                now: Date()
+            ) else { return }
+            showResetNotice(notice, for: account.id, kindLabel: label)
+        }
+    }
+
     /// Spends one banked reset for the account. Called only after the user
     /// confirmed. The count is checked again here, because a poll may have
     /// landed while the confirmation was open; at 0 nothing is sent.
@@ -369,6 +393,10 @@ final class AppModel {
         guard !resetsInFlight.contains(account.id) else { return }
         let accountID = account.id
         let windowed = scheduler.hasResetRetryWindow(account.provider)
+        // Taken now: the read after the attempt may drop the kind.
+        let kindLabel = choice.flatMap { key in
+            statuses[accountID]?.status.resetKinds?.first { $0.key == key }?.label
+        }
         let attemptID: UUID
         if retrying {
             guard let pending = resetAttempts.pendingID(for: accountID, choice: choice) else { return }
@@ -379,17 +407,13 @@ final class AppModel {
         } else {
             if windowed, resetGates[accountID] != nil { return }
             guard let count = statuses[accountID]?.status.resetCreditsAvailable, count > 0 else {
-                showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: accountID)
+                showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: accountID, kindLabel: kindLabel)
                 return
             }
             guard let id = resetAttempts.attemptID(for: accountID, choice: choice) else { return }
             attemptID = id
         }
         resetNotices[accountID] = nil
-        // Taken now: the read after the attempt may drop the kind.
-        let kindLabel = choice.flatMap { key in
-            statuses[accountID]?.status.resetKinds?.first { $0.key == key }?.label
-        }
         resetsInFlight.insert(accountID)
         let scheduler = scheduler
         // Owned by the model, not the window: closing the window does not
@@ -410,7 +434,7 @@ final class AppModel {
                 adoptAttemptState(state, for: accountID, label: kindLabel)
             }
             if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(), kindLabel: kindLabel) {
-                showResetNotice(notice, for: accountID)
+                showResetNotice(notice, for: accountID, kindLabel: kindLabel)
             }
         }
     }
@@ -480,13 +504,15 @@ final class AppModel {
         resetNotices[account.id] = nil
     }
 
-    private func showResetNotice(_ notice: ResetNotice, for accountID: UUID) {
+    /// Every reset message reaches the row and VoiceOver here, and only
+    /// here, so each is announced once and with the kind it was for.
+    private func showResetNotice(_ notice: ResetNotice, for accountID: UUID, kindLabel: String? = nil) {
         resetNotices[accountID] = notice
         NSAccessibility.post(
             element: NSApp as Any,
             notification: .announcementRequested,
             userInfo: [
-                .announcement: notice.text,
+                .announcement: ResetMessages.announcement(for: notice, kindLabel: kindLabel),
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ]
         )
