@@ -480,6 +480,95 @@ final class ResetConfirmationFlowTests: XCTestCase {
         XCTAssertEqual(fresh.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row lists its kinds")
     }
 
+    /// The kinds fixture keeping only the grants whose id passes `keep`.
+    private static func body(keepingGrants keep: (String?) -> Bool) throws -> Data {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try ClaudeKindsFixture.kindsBody()) as? [String: Any])
+        var block = try XCTUnwrap(root[AnthropicResetParser.blockKey] as? [String: Any])
+        let grants = try XCTUnwrap(block["grants"] as? [[String: Any]])
+        block["grants"] = grants.filter { keep($0["id"] as? String) }
+        root[AnthropicResetParser.blockKey] = block
+        return try JSONSerialization.data(withJSONObject: root)
+    }
+
+    private static func bodyWithoutRefill() throws -> Data {
+        try body { $0 != ClaudeKindsFixture.refillGrant }
+    }
+
+    /// A card that follows the model's latest reading, as `DetailWindow`
+    /// builds it, recording each choice before the model gets it.
+    private func liveCard(_ flow: HostedResetFlow, gate: ResetGate?,
+                          choices: @escaping @MainActor (ResetConfirmation.Choice) -> Void) -> ResetConfirmation {
+        let cached = flow.model.statuses[flow.account.id]
+        let model = flow.model
+        let account = flow.account
+        return ResetConfirmation(
+            displayName: account.displayName,
+            count: cached?.status.resetCreditsAvailable ?? 0,
+            windows: Formatting.windowOrder(Formatting.windows(of: cached)),
+            kinds: cached?.status.resetKinds,
+            gate: gate,
+            onChoice: { choices($0); model.confirmReset(account, choice: $0) },
+            onCancel: {}
+        )
+    }
+
+    /// Lands a reading of `body` on the model.
+    private func read(_ body: Data, into flow: HostedResetFlow, until check: @escaping @MainActor ([ResetKind.Key]?) -> Bool) throws {
+        flow.kinds.http.enqueue(status: 200, body: body)
+        let id = flow.account.id
+        try HostedResetFlow.wait("the reading") {
+            await flow.kinds.clock.advance(by: BackoffPolicy.errorCap + 1)
+            flow.model.refreshAll()
+            await flow.harness.waitForStatus("the reading landed") { check($0[id]?.status.resetKinds?.map(\.key)) }
+        }
+    }
+
+    /// The owner picks the model refill; a reading that drops it lands
+    /// while the card is open, leaving one kind listed. Confirming sends
+    /// nothing, names the refill, and never spends the full reset instead.
+    func testPickedKindGoneWhileOpenNeverSpendsTheOtherKind() throws {
+        let flow = try started()
+        var choices: [ResetConfirmation.Choice] = []
+        let window = host(liveCard(flow, gate: nil) { choices.append($0) })
+        let card = flow.pickLayout(in: window)
+        try HostedResetFlow.click(card.kindLine(1), in: window)
+
+        try read(try Self.bodyWithoutRefill(), into: flow) { $0 == [.full] }
+        let hosting = try XCTUnwrap(window.contentView as? NSHostingView<ResetConfirmation>)
+        hosting.rootView = liveCard(flow, gate: nil) { choices.append($0) }
+        HostedResetFlow.settle()
+        let sent = flow.kinds.http.requests.count
+        try HostedResetFlow.click(card.confirm, in: window)
+
+        XCTAssertEqual(choices, [ResetConfirmation.Choice(kind: .modelRefill, label: "Testmodel reset", retrying: false)])
+        XCTAssertNil(flow.model.resetTasks[flow.account.id], "nothing started")
+        XCTAssertEqual(flow.kinds.http.requests.count, sent, "nothing sent")
+        XCTAssertTrue(flow.kinds.postRequests.isEmpty)
+        XCTAssertEqual(flow.model.resetNotices[flow.account.id]?.text, "No resets available")
+    }
+
+    /// A card that opened on one kind keeps that kind when a reading swaps
+    /// it for another while the card is open.
+    func testOneKindCardKeepsItsKindWhenTheReadingSwapsIt() throws {
+        let flow = try started()
+        let onlyFull = try Self.bodyWithoutRefill()
+        try read(onlyFull, into: flow) { $0 == [.full] }
+        var choices: [ResetConfirmation.Choice] = []
+        let window = host(liveCard(flow, gate: nil) { choices.append($0) })
+
+        let onlyRefill = try Self.body { $0 == ClaudeKindsFixture.refillGrant }
+        try read(onlyRefill, into: flow) { $0 == [.modelRefill] }
+        let hosting = try XCTUnwrap(window.contentView as? NSHostingView<ResetConfirmation>)
+        hosting.rootView = liveCard(flow, gate: nil) { choices.append($0) }
+        HostedResetFlow.settle()
+        let sent = flow.kinds.http.requests.count
+        try HostedResetFlow.click(flow.pickLayout(in: window).confirm, in: window)
+
+        XCTAssertEqual(choices.map(\.kind), [.full], "the kind the card opened on")
+        XCTAssertEqual(flow.kinds.http.requests.count, sent, "nothing sent")
+        XCTAssertTrue(flow.kinds.postRequests.isEmpty)
+    }
+
     /// With every kind at 0 and no attempt pending, a confirmed pick sends
     /// nothing and the row says why.
     func testNewAttemptRefusedWhenNothingIsSpendable() throws {

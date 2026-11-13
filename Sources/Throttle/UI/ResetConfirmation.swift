@@ -48,6 +48,9 @@ struct ResetConfirmation: View {
     let onCancel: @MainActor () -> Void
 
     @State private var picked: ResetKind.Key?
+    /// Each kind's label as the card first showed it, so a pick whose kind
+    /// has since left the list still names it in the row's message.
+    @State private var openingLabels: [ResetKind.Key: String]
 
     /// A row with no kinds.
     init(
@@ -80,7 +83,13 @@ struct ResetConfirmation: View {
         self.now = now
         self.onChoice = onChoice
         self.onCancel = onCancel
-        _picked = State(initialValue: picked)
+        // A card that opens on one kind has that kind picked from the start,
+        // so a reading that swaps the kind while it is open cannot move the
+        // confirmation onto another one.
+        var opening = picked
+        if opening == nil, self.kinds.count == 1, !Self.isRetry(gate) { opening = self.kinds.first?.key }
+        _picked = State(initialValue: opening)
+        _openingLabels = State(initialValue: Dictionary(self.kinds.map { ($0.key, $0.label) }) { first, _ in first })
     }
 
     /// Confirms a row with no kinds.
@@ -94,7 +103,9 @@ struct ResetConfirmation: View {
         ResetOffer(count: count, kinds: kinds, dimmed: false, gate: gate, now: now)
     }
 
-    private var isRetry: Bool {
+    private var isRetry: Bool { Self.isRetry(gate) }
+
+    private static func isRetry(_ gate: ResetGate?) -> Bool {
         if case .retryOnly = gate { return true }
         return false
     }
@@ -185,31 +196,38 @@ struct ResetConfirmation: View {
     // MARK: Drawing
 
     /// The kind the card would spend, when it has one.
+    /// The pick stands when a reading drops its kind while the card is open:
+    /// confirming it then sends nothing and the row says why. The card never
+    /// moves onto a kind the owner did not pick.
     private var chosenKind: ResetKind.Key? {
-        if let retry = offer.retryKind { return retry }
-        if kinds.count == 1 { return kinds.first?.key }
-        return picked
+        offer.retryKind ?? picked
+    }
+
+    private var pickIsListed: Bool {
+        kinds.contains { $0.key == picked }
     }
 
     private var chosenLabel: String? {
         if let label = offer.retryLabel { return label }
         guard let key = chosenKind else { return nil }
-        return kinds.first { $0.key == key }?.label
+        return kinds.first { $0.key == key }?.label ?? openingLabels[key]
     }
 
     private var title: String {
         guard offer.hasKinds else { return Self.title(count: count, displayName: displayName) }
         if let label = offer.retryLabel { return Self.retryTitle(label: label, displayName: displayName) }
-        if kinds.count == 1, let only = kinds.first { return Self.title(kind: only, displayName: displayName) }
+        if kinds.count == 1, let only = kinds.first, only.key == picked {
+            return Self.title(kind: only, displayName: displayName)
+        }
         return Self.pickTitle(displayName: displayName)
     }
 
     /// The list is drawn when there is something to tell apart: several
-    /// kinds, or a retry beside other kinds, even when the retried kind is
-    /// no longer listed.
+    /// kinds, a retry beside other kinds (even when the retried kind is no
+    /// longer listed), or a kind the owner has not picked.
     private var showsPicker: Bool {
         if let retry = offer.retryKind { return kinds.contains { $0.key != retry } }
-        return kinds.count > 1
+        return kinds.count > 1 || (!kinds.isEmpty && !pickIsListed)
     }
 
     var body: some View {
