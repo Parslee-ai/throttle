@@ -116,7 +116,10 @@ Stable handles, from `Sources/Throttle/UI/`:
   development build`), `Reveal diagnostics log` (help text), and Done as the
   last button.
 
-Feature recipes are in [features/README.md](features/README.md).
+Feature recipes are in [features/README.md](features/README.md). When a change
+adds, renames or removes something a user sees, update the matching feature file
+in the same change; `/pstack:maintain-verification-skill` checks the map against
+the app.
 
 **Hosted-view route** (no live app, no permissions):
 
