@@ -31,6 +31,20 @@ enum Redactor {
         return out
     }
 
+    /// Stands in for a removed id.
+    static let idReplacement = "[id]"
+
+    /// `raw` with every occurrence of each id replaced in any letter case,
+    /// then redacted, then cut to `maxLength` characters. Cutting last means
+    /// half an id or half a token can never survive at the cut, where it
+    /// would no longer match.
+    static func capped(_ raw: String, hiding ids: some Sequence<String> = [String](), maxLength: Int) -> String {
+        let shown = ids.filter { !$0.isEmpty }.reduce(raw) { out, id in
+            out.replacingOccurrences(of: id, with: idReplacement, options: .caseInsensitive)
+        }
+        return String(redact(shown).prefix(maxLength))
+    }
+
     /// Redacted first, so a token cut in half by the cap cannot slip past
     /// the redactor; then every control character (newlines included)
     /// becomes a space, runs of spaces collapse, and the result is capped at

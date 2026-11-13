@@ -290,7 +290,7 @@ struct OpenAIProvider: UsageProvider {
         guard type.contains("permission") || type.contains("forbidden") else { return nil }
         var text = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if text.isEmpty { text = "Not allowed by organization (\(type))" }
-        return Redactor.redact(String(text.prefix(300)))
+        return Redactor.capped(text, maxLength: 300)
     }
 
     private static func retryAfter(from response: HTTPResponse) -> TimeInterval? {

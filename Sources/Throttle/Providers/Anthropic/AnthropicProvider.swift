@@ -172,8 +172,9 @@ struct AnthropicProvider: UsageProvider {
     /// `error` object, or a different error type). The shape is
     /// `{"type":"error","error":{"type":"permission_error","message":"…",
     /// "details":{"error_code":"oauth_not_allowed_for_organization"}}}`; a
-    /// `details.error_code` counts even if the type name changes.
-    static func permissionRefusal(in body: Data) -> String? {
+    /// `details.error_code` counts even if the type name changes. `ids` are
+    /// removed before the message is cut, so none survives in part.
+    static func permissionRefusal(in body: Data, hiding ids: [String] = []) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: body),
               let root = json as? [String: Any],
               let error = root["error"] as? [String: Any] else {
@@ -187,14 +188,14 @@ struct AnthropicProvider: UsageProvider {
         if message.isEmpty {
             message = code.map { "Not allowed by organization (\($0))" } ?? "Not allowed by organization"
         }
-        return Redactor.redact(String(message.prefix(300)))
+        return Redactor.capped(message, hiding: ids, maxLength: 300)
     }
 
-    /// The first 300 bytes of an error body, redacted, for the log. The body
-    /// is the provider's error object, never a token, but it is redacted and
-    /// capped all the same.
+    /// The first 300 characters of an error body, redacted, for the log. The
+    /// body is the provider's error object, never a token, but it is redacted
+    /// and capped all the same.
     private static func snippet(_ body: Data) -> String {
-        Redactor.redact(String(decoding: body.prefix(300), as: UTF8.self))
+        Redactor.capped(String(decoding: body, as: UTF8.self), maxLength: 300)
     }
 
     // MARK: - Profile
@@ -410,9 +411,8 @@ struct AnthropicProvider: UsageProvider {
             Self.logger.error("Reset rejected with HTTP 401")
             throw UsageError.needsLogin
         case 403:
-            if let refusal = Self.permissionRefusal(in: response.body) {
-                // The provider's words reach the row; the attempt's ids do not.
-                let message = Self.removing([orgUUID, grantID, requestID], from: refusal)
+            // The provider's words reach the row; the attempt's ids do not.
+            if let message = Self.permissionRefusal(in: response.body, hiding: [orgUUID, grantID, requestID]) {
                 Self.logger.error("Reset forbidden for this organization: \(message, privacy: .public)")
                 throw UsageError.forbidden(reason: message)
             }

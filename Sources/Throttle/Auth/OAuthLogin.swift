@@ -158,7 +158,7 @@ enum OAuthFlow {
                 ?? (object["error"] as? [String: Any])?["message"] as? String
             let text = [code, detail].compactMap { $0 }.joined(separator: ": ")
             if !text.isEmpty {
-                reason += " (\(text.prefix(200)))"
+                reason += " (\(Redactor.capped(text, maxLength: 200)))"
             }
         }
         return Redactor.redact(reason)
