@@ -420,6 +420,66 @@ final class ResetConfirmationFlowTests: XCTestCase {
         XCTAssertEqual(confirmed, [ResetConfirmation.Choice(kind: nil, label: nil, retrying: true)])
     }
 
+    /// A pick confirmed on a row still showing the previous launch's saved
+    /// numbers spends nothing: the row asks for a moment, the account is
+    /// read once, and the row then lists the kinds from that reading.
+    func testClickBeforeFirstReadingReadsOnceThenListsKinds() throws {
+        let stagger: TimeInterval = 30
+        // The previous launch: two accounts read once and saved.
+        let earlier = ClaudeKindsFixture(settings: PollSettings(stagger: stagger))
+        let earlierHarness = ModelHarness(fixture: earlier.fixture, scheduler: earlier.scheduler)
+        addTeardownBlock { await earlierHarness.cleanUp() }
+        let (first, second) = try HostedResetFlow.wait("the previous launch") {
+            let first = try await earlier.fixture.addAccount(.anthropic, email: "fixture-first")
+            let second = try await earlier.fixture.addAccount(.anthropic, email: "fixture-second")
+            for _ in 0..<2 {
+                try earlier.enqueueReading()
+                earlier.enqueueProfile()
+            }
+            await earlierHarness.start()
+            await earlierHarness.stopPolling()
+            await earlierHarness.persistence.flush()
+            await earlierHarness.persistence.stop()
+            return (first, second)
+        }
+
+        // This launch reads the first account, then waits out the stagger
+        // before the second, which shows its saved numbers meanwhile.
+        let kinds = ClaudeKindsFixture(fixture: earlier.fixture.relaunched())
+        let harness = ModelHarness(fixture: kinds.fixture, scheduler: kinds.scheduler)
+        addTeardownBlock {
+            await kinds.cleanUp()
+            await harness.cleanUp()
+        }
+        try kinds.enqueueReading()
+        kinds.enqueueProfile()
+        try HostedResetFlow.wait("the first account's reading") {
+            harness.model.start()
+            _ = await kinds.clock.parkedSleep(interval: stagger, number: 1)
+            await harness.waitForModel("both rows shown") { $0.statuses[first.id] != nil && $0.statuses[second.id] != nil }
+        }
+        XCTAssertEqual(kinds.usageReads, 1, "only the first account was read this launch")
+        let saved = try XCTUnwrap(harness.model.statuses[second.id])
+        XCTAssertEqual(saved.status.resetKinds?.map(\.key), [.full, .modelRefill], "the saved kinds")
+        XCTAssertFalse(AccountRow.isDimmed(saved), "the row takes a click")
+
+        let flow = HostedResetFlow(kinds: kinds, harness: harness, account: second)
+        try kinds.enqueueReading()
+        kinds.enqueueProfile()
+        let window = host(flow.card())
+        let card = flow.pickLayout(in: window)
+        try HostedResetFlow.click(card.kindLine(1), in: window)
+        try HostedResetFlow.click(card.confirm, in: window)
+        try flow.finishReset()
+
+        XCTAssertTrue(kinds.postRequests.isEmpty, "nothing was spent")
+        XCTAssertEqual(kinds.usageReads, 2, "the second account was read once")
+        XCTAssertEqual(harness.model.resetNotices[second.id]?.text, ResetMessages.needsFreshReading)
+        XCTAssertNil(harness.model.resetGates[second.id], "the next click is a new attempt")
+        let fresh = try XCTUnwrap(harness.model.statuses[second.id])
+        XCTAssertEqual(fresh.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row lists its kinds")
+    }
+
     /// With every kind at 0 and no attempt pending, a confirmed pick sends
     /// nothing and the row says why.
     func testNewAttemptRefusedWhenNothingIsSpendable() throws {
