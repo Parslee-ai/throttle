@@ -163,3 +163,14 @@ one follow-up read honors the same backoff horizons as a cycle.
 This repository is public. Nothing operator-specific belongs in it: no account
 email, no account id, no token, no personal home path, no screenshot of a real
 account. Accounts are added at runtime through the app, always.
+
+Two rules for tests, both learned the hard way:
+
+- **No token-shaped literal in a test.** Build fake tokens with
+  `Tests/ThrottleTests/FakeToken.swift`, which assembles them at run time. A
+  literal that looks like a real key trips secret scanners on this public
+  repository and can block a push.
+- **No test host left running.** The Debug build shares the release's bundle
+  identifier, so it shares its account store and Keychain service. After a test
+  run, check that no `build/DerivedData/.../Throttle.app` process is still
+  alive, and never launch a Debug build by hand on a Mac with real accounts.
