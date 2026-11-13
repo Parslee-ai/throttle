@@ -191,6 +191,6 @@ Two rules for tests, both learned the hard way:
   literal that looks like a real key trips secret scanners on this public
   repository and can block a push.
 - **No test host left running.** The Debug build has its own identity and its
-  own store, so a leftover host no longer reads real accounts, but it still runs
-  a poller and holds a menu bar item. After a test run, check that no
+  own store, so a leftover host no longer reads real accounts, but it still holds a
+  menu bar item and memory. After a test run, check that no
   `build/DerivedData/.../Throttle.app` process is still alive, and stop it.
