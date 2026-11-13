@@ -924,7 +924,7 @@ final class PopupSnapshotTests: XCTestCase {
         }
     }
 
-    private func fittedHeight<V: View>(_ view: V, width: CGFloat? = nil) -> CGFloat {
+    func fittedHeight<V: View>(_ view: V, width: CGFloat? = nil) -> CGFloat {
         let hosting = NSHostingView(rootView: view.frame(width: width))
         hosting.layoutSubtreeIfNeeded()
         return hosting.fittingSize.height
@@ -1055,7 +1055,7 @@ final class PopupSnapshotTests: XCTestCase {
         XCTAssertGreaterThan(Self.distinctColors(full, columns: Int((columnsEnd * scale).rounded(.up))..<full.pixelsWide), 2)
     }
 
-    private static func samePixels(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, columns: Range<Int>, rows: Range<Int>? = nil) -> Bool {
+    static func samePixels(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, columns: Range<Int>, rows: Range<Int>? = nil) -> Bool {
         for y in rows ?? 0..<min(a.pixelsHigh, b.pixelsHigh) {
             for x in columns where a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y) {
                 return false
@@ -1090,7 +1090,7 @@ final class PopupSnapshotTests: XCTestCase {
 
     // MARK: Rendering
 
-    private static let appearances: [(name: String, value: NSAppearance)] = [
+    static let appearances: [(name: String, value: NSAppearance)] = [
         ("dark", NSAppearance(named: .darkAqua)!),
         ("light", NSAppearance(named: .aqua)!),
     ]
@@ -1117,7 +1117,7 @@ final class PopupSnapshotTests: XCTestCase {
     ///
     /// `legacyScrollers` shows scrollers the way a Mac with a mouse attached
     /// does, taking width from the content; `inspect` sees the settled view.
-    private func render<V: View>(
+    func render<V: View>(
         _ view: V,
         appearance: NSAppearance,
         legacyScrollers: Bool = false,
@@ -1156,7 +1156,7 @@ final class PopupSnapshotTests: XCTestCase {
     }
 
     /// Asserts the render drew something, then writes it when asked to.
-    private func check(_ rep: NSBitmapImageRep, named name: String) throws {
+    func check(_ rep: NSBitmapImageRep, named name: String) throws {
         let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
         XCTAssertGreaterThan(png.count, 1_000, name)
         XCTAssertGreaterThan(distinctColors(in: rep), 16, "\(name) rendered as a flat image")
@@ -1169,7 +1169,7 @@ final class PopupSnapshotTests: XCTestCase {
         try png.write(to: folder.appendingPathComponent("\(name).png"))
     }
 
-    private func distinctColors(in rep: NSBitmapImageRep) -> Int {
+    func distinctColors(in rep: NSBitmapImageRep) -> Int {
         var seen = Set<UInt32>()
         let stepX = max(1, rep.pixelsWide / 200)
         let stepY = max(1, rep.pixelsHigh / 200)

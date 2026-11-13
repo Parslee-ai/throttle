@@ -19,10 +19,20 @@ protocol UsageProvider: Sendable {
     /// Called only from an explicit, confirmed user action, never from a poll,
     /// a timer, a wake, or a launch. `attemptID` is the idempotency key: every
     /// retry of the same attempt passes the same value, so a reset that went
-    /// through is never spent twice. Returns the provider's answer; throws
-    /// `UsageError` for anything that is not an answer. The caller re-reads
-    /// usage after `.reset`; the adapter never invents window numbers.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome
+    /// through is never spent twice. `choice` is the kind the owner picked,
+    /// `nil` when the row offered no kinds; the adapter resolves it to one of
+    /// its own grants and never spends a different kind in its place. An
+    /// adapter whose provider has one unnamed kind ignores it. Returns the
+    /// provider's answer, or `.blocked` / `.needsFreshReading` when nothing
+    /// was sent; throws `UsageError` for anything that is not an answer. The
+    /// caller re-reads usage after `.reset`; the adapter never invents window
+    /// numbers.
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome
 
     /// Exchanges a refresh token for a rotated credential.
     ///
@@ -34,13 +44,30 @@ protocol UsageProvider: Sendable {
     /// A login for this account just finished, new or repeated. Anything the
     /// adapter remembered about the account from before is out of date.
     func accountDidSignIn(_ accountID: UUID) async
+
+    /// How long after an attempt's first send a retry may still reuse its
+    /// request id, or `nil` when the provider names no such limit.
+    ///
+    /// A provider that names one also gets the scheduler's strict rules for
+    /// an attempt that went unanswered: past the window it is closed without
+    /// a send; a refusal of its retry is reported as unexpected, since it
+    /// cannot prove the first send spent nothing; and once closed, no new
+    /// attempt is accepted until a usage read made afterwards succeeds.
+    var resetRetryWindow: TimeInterval? { get }
 }
 
 extension UsageProvider {
     func accountDidSignIn(_ accountID: UUID) async {}
 
+    var resetRetryWindow: TimeInterval? { nil }
+
     /// A provider with no reset to spend.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome {
         throw ResetUnsupportedError()
     }
 }

@@ -11,9 +11,11 @@ let deadlockGuard: Duration = .seconds(60)
 
 /// Suspends until `event` returns. `event` must wait on an explicit signal
 /// (a continuation resumed by the code under test or its stub), never on
-/// wall time. A wait still pending after `deadlockGuard` fails the test.
+/// wall time. A wait still pending after `limit` (`deadlockGuard` unless a
+/// caller needs a tighter bound) fails the test.
 func awaitEvent(
     _ description: String,
+    within limit: Duration = deadlockGuard,
     file: StaticString = #filePath,
     line: UInt = #line,
     _ event: @escaping @Sendable () async -> Void
@@ -26,7 +28,7 @@ func awaitEvent(
             once.resume(true)
         }
         watchdog = Task {
-            try? await Task.sleep(for: deadlockGuard)
+            try? await Task.sleep(for: limit)
             once.resume(false)
         }
     }

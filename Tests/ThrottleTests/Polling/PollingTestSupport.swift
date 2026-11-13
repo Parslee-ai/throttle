@@ -50,6 +50,7 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         let accountID: UUID
         let attemptID: UUID
         let accessToken: String
+        var choice: ResetKind.Key? = nil
     }
 
     private struct State {
@@ -66,6 +67,8 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         var pendingResetReleases = 0
         /// When set, the reset count every successful fetch reports.
         var resetCredits: Int?
+        var resetKinds: [ResetKind]?
+        var resetRetryWindow: TimeInterval?
         var fetchWaiters: [CheckedContinuation<Void, Never>] = []
         var pendingFetchReleases = 0
         /// Reads running right now, per account, and the most ever seen.
@@ -152,6 +155,21 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
     /// The reset count successful fetches report from now on.
     func setResetCredits(_ count: Int?) {
         state.withLock { $0.resetCredits = count }
+    }
+
+    /// The reset kinds successful fetches report from now on. Their total
+    /// becomes the reported count.
+    func setResetKinds(_ kinds: [ResetKind]?) {
+        state.withLock { $0.resetKinds = kinds }
+    }
+
+    /// The retry window this double names, `nil` (the default) for none.
+    func setResetRetryWindow(_ window: TimeInterval?) {
+        state.withLock { $0.resetRetryWindow = window }
+    }
+
+    var resetRetryWindow: TimeInterval? {
+        state.withLock { $0.resetRetryWindow }
     }
 
     /// Lets one waiting `.waitThenAnswer` reset answer (or the next one, if
@@ -281,7 +299,8 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
                 ],
                 fetchedAt: clock.now(),
                 state: .ok,
-                resetCreditsAvailable: state.withLock { $0.resetCredits }
+                resetCreditsAvailable: state.withLock { $0.resetCredits },
+                resetKinds: state.withLock { $0.resetKinds }
             )
         case .succeed(let usedPercent):
             return AccountStatus(
@@ -293,7 +312,8 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
                 ],
                 fetchedAt: now,
                 state: .ok,
-                resetCreditsAvailable: state.withLock { $0.resetCredits }
+                resetCreditsAvailable: state.withLock { $0.resetCredits },
+                resetKinds: state.withLock { $0.resetKinds }
             )
         case .succeedWindows(let windows):
             return AccountStatus(
@@ -303,7 +323,8 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
                 windows: windows,
                 fetchedAt: now,
                 state: .ok,
-                resetCreditsAvailable: state.withLock { $0.resetCredits }
+                resetCreditsAvailable: state.withLock { $0.resetCredits },
+                resetKinds: state.withLock { $0.resetKinds }
             )
         case .fail(let error):
             throw error
@@ -359,9 +380,9 @@ final class MockUsageProvider: UsageProvider, @unchecked Sendable {
         return rotated
     }
 
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID, choice: ResetKind.Key?) async throws -> ResetOutcome {
         let behavior: ResetBehavior = state.withLock { s in
-            s.resetCalls.append(ResetCall(accountID: account.id, attemptID: attemptID, accessToken: credential.accessToken))
+            s.resetCalls.append(ResetCall(accountID: account.id, attemptID: attemptID, accessToken: credential.accessToken, choice: choice))
             guard var script = s.resetScripts[account.id] else { return s.defaultResetBehavior }
             let next = script.removeFirst()
             if script.isEmpty { script = [next] }

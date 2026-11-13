@@ -18,8 +18,14 @@ struct AccountStatus: Codable, Hashable, Sendable {
     /// How many manual limit resets the account has banked, when the provider
     /// reports such a count. `nil` when it does not, and the detail window
     /// then shows no resets column at all. Optional so a status cache written
-    /// before this field existed still decodes.
+    /// before this field existed still decodes. When `resetKinds` is present
+    /// this is always their total, spendable now or not.
     let resetCreditsAvailable: Int?
+    /// The banked resets by kind, in the fixed display order of
+    /// `ResetKind.Key`, one entry per kind. `nil` means the provider reports
+    /// one unnamed kind, counted by `resetCreditsAvailable` alone, as Codex
+    /// does; such a status encodes exactly as it did before kinds existed.
+    let resetKinds: [ResetKind]?
 
     init(
         accountID: UUID,
@@ -29,7 +35,8 @@ struct AccountStatus: Codable, Hashable, Sendable {
         fetchedAt: Date,
         state: AccountState,
         planLabel: String? = nil,
-        resetCreditsAvailable: Int? = nil
+        resetCreditsAvailable: Int? = nil,
+        resetKinds: [ResetKind]? = nil
     ) {
         self.accountID = accountID
         self.provider = provider
@@ -38,6 +45,12 @@ struct AccountStatus: Codable, Hashable, Sendable {
         self.fetchedAt = fetchedAt
         self.state = state
         self.planLabel = planLabel
-        self.resetCreditsAvailable = resetCreditsAvailable
+        // Sorted here so every adapter and every cache rebuild agrees on the
+        // order, and two readings of the same payload compare equal.
+        let kinds = resetKinds?.enumerated()
+            .sorted { ($0.element.key, $0.offset) < ($1.element.key, $1.offset) }
+            .map(\.element)
+        self.resetKinds = kinds
+        self.resetCreditsAvailable = kinds.map { $0.reduce(0) { $0 + $1.count } } ?? resetCreditsAvailable
     }
 }

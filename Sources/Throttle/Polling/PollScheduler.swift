@@ -154,6 +154,23 @@ actor PollScheduler {
     /// The sequence number of each account's latest read that succeeded.
     private var lastSuccessfulRead: [UUID: Int] = [:]
 
+    /// An attempt that went unanswered, for a provider with a retry window.
+    /// Memory only, like every reset id.
+    private struct OpenAttempt {
+        let id: UUID
+        let choice: ResetKind.Key?
+        let until: Date
+    }
+    private var openAttempts: [UUID: OpenAttempt] = [:]
+    /// Accounts whose unanswered attempt was closed, with `readSequence` at
+    /// the close: only a read numbered above it may lift the hold.
+    private var awaitingReadAfter: [UUID: Int] = [:]
+    /// Attempt ids a sign-in ended. A retry carrying one sends nothing.
+    private var retiredAttemptIDs: Set<UUID> = []
+    /// Bumped by every sign-in, so a read or a reset started before one
+    /// cannot write its result over the new sign-in's.
+    private var signIns: [UUID: Int] = [:]
+
     /// Budget for each reset request, including the credential it needs. A
     /// reset still running when it expires is reported as unreachable; the
     /// user's retry reuses the same attempt id, so it cannot spend twice.
@@ -551,6 +568,7 @@ actor PollScheduler {
     ) async -> Bool {
         let sequence = beginRead(account.id)
         defer { endRead(account.id) }
+        let signIn = signIns[account.id]
         let timeout = settings.perAccountTimeout
         let store = store
         let resolver = resolver
@@ -567,6 +585,9 @@ actor PollScheduler {
                 }
             }
             if onlyIfStillStored, await storedAccount(account.id) == nil { return true }
+            // Requested under an earlier sign-in: its numbers are not this
+            // sign-in's to show.
+            if signIns[account.id] != signIn { return true }
             backoff.record(outcome: .success, for: account.id, provider: provider, now: clock.now())
             persistBackoffIfChanged()
             lastSuccessfulRead[account.id] = sequence
@@ -583,6 +604,7 @@ actor PollScheduler {
         } catch {
             if Task.isCancelled { return false }
             if onlyIfStillStored, await storedAccount(account.id) == nil { return true }
+            if signIns[account.id] != signIn { return true }
             await record(error: error, for: account, provider: provider, attemptAt: attemptAt)
         }
         return true
@@ -645,26 +667,115 @@ actor PollScheduler {
     /// - The read after the reset never overlaps a poll's read of the same
     ///   account. It waits for one in flight, and skips when a read that
     ///   started after the reset finished has already succeeded.
-    func useReset(accountID: UUID, attemptID: UUID) async -> ResetResult {
+    /// - `choice`, the kind the owner picked, reaches the adapter exactly as
+    ///   given, on the first send and on the resend after a 401. The
+    ///   scheduler never reads it, so it can never pick a kind itself.
+    /// - When the adapter answers that it needs a reading first, nothing was
+    ///   spent, so the one read runs without the settle delay.
+    /// - For a provider with a retry window (`resetRetryWindow`), an attempt
+    ///   that went unanswered stays open for that long after its first send.
+    ///   The window is checked right before every send, the resend after a
+    ///   refresh included; past it the attempt closes with nothing sent and
+    ///   reads usage once. A refusal of its retry is `.outcome(.unexpected)`,
+    ///   because it cannot prove the first send spent nothing, and closes it
+    ///   too. A closed attempt holds the account: nothing is sent for it
+    ///   until a usage read started after the close has succeeded.
+    func useReset(accountID: UUID, attemptID: UUID, choice: ResetKind.Key? = nil) async -> ResetResult {
         guard resetsInFlight.insert(accountID).inserted else {
             return .alreadyRunning
         }
         defer { resetsInFlight.remove(accountID) }
+        // Reads numbered above this one were running at the click or started
+        // after it. Taken before the first suspension.
+        let clickedAt = readSlots[accountID].map { $0.sequence - 1 } ?? readSequence
 
         guard let account = await storedAccount(accountID) else { return .unsupported }
         let provider = account.provider
         guard let adapter = providers[provider] else { return .unsupported }
+        let window = adapter.resetRetryWindow
+        let signIn = signIns[accountID]
+        let startedAt = clock.now()
 
-        let result: ResetResult
-        if let until = backoff.shouldSkip(account: accountID, provider: provider, now: clock.now()) {
+        var result: ResetResult
+        var wasUnanswered = false
+        var sendBy: Date?
+        var expired = false
+        if let window {
+            if retiredAttemptIDs.contains(attemptID) {
+                // A choice made before a sign-in: not-available, and the one
+                // read below shows the new sign-in's kinds.
+                await diagnose(account, provider: provider, at: startedAt,
+                               message: "Reset not sent; the attempt belongs to an earlier sign-in")
+                result = .outcome(.notAvailable)
+                await finishWithoutSend(account, result: result)
+                return result
+            }
+            if let hold = heldFor(accountID) {
+                await diagnose(account, provider: provider, at: startedAt, message: "Reset not sent; \(hold)")
+                result = .outcome(.needsFreshReading)
+                await finishWithoutSend(account, result: result)
+                return result
+            }
+            if let open = openAttempts[accountID] {
+                guard open.id == attemptID, open.choice == choice else {
+                    await diagnose(account, provider: provider, at: startedAt,
+                                   message: "Reset not sent; an earlier attempt is still open")
+                    return .alreadyRunning
+                }
+                wasUnanswered = true
+                sendBy = open.until
+                expired = startedAt >= open.until
+            } else {
+                sendBy = startedAt.addingTimeInterval(window)
+            }
+        }
+
+        if expired {
+            result = .outcome(.unexpected)
+        } else if let until = backoff.shouldSkip(account: accountID, provider: provider, now: startedAt) {
             result = .rateLimited(until: until)
-            await diagnose(account, provider: provider, at: clock.now(),
+            await diagnose(account, provider: provider, at: startedAt,
                            message: "Reset not sent; backing off until \(until.formatted(.iso8601))")
+        } else if let sent = await attemptReset(account, adapter: adapter, attemptID: attemptID, choice: choice, sendBy: sendBy) {
+            result = sent
         } else {
-            result = await attemptReset(account, adapter: adapter, attemptID: attemptID)
+            expired = true
+            result = .outcome(.unexpected)
+        }
+
+        if let window, signIns[accountID] == signIn, await storedAccount(accountID) != nil {
+            if expired {
+                closeAttempt(accountID)
+                await diagnose(account, provider: provider, at: clock.now(),
+                               message: "Reset retry window ended; nothing sent")
+            } else if wasUnanswered, result.isRefusalAnswer {
+                result = .outcome(.unexpected)
+                closeAttempt(accountID)
+            } else {
+                switch result.attemptEnding {
+                case .ambiguous:
+                    if openAttempts[accountID] == nil {
+                        openAttempts[accountID] = OpenAttempt(
+                            id: attemptID,
+                            choice: choice,
+                            until: startedAt.addingTimeInterval(window)
+                        )
+                    }
+                    if let open = openAttempts[accountID], clock.now() >= open.until {
+                        closeAttempt(accountID)
+                        if !result.wantsUsageRead { result = .outcome(.unexpected) }
+                    }
+                case .definitive:
+                    openAttempts[accountID] = nil
+                case .refused, .nothingHappened:
+                    break
+                }
+            }
         }
         // Reads numbered above this one started after the reset finished.
-        let completedAt = readSequence
+        // An adapter that wants a reading sent nothing, so a poll's read that
+        // was already running at the click serves as well.
+        let completedAt = result == .outcome(.needsFreshReading) ? clickedAt : readSequence
         await diagnostics?.record(DiagnosticEvent(
             ts: clock.now(),
             provider: provider,
@@ -681,7 +792,7 @@ actor PollScheduler {
             // read, so a second reset is still refused and the row keeps its
             // spinner until the fresh numbers land. A cancelled wait (the app
             // quitting) sends nothing.
-            if resetReadDelay > 0 {
+            if resetReadDelay > 0, result != .outcome(.needsFreshReading) {
                 do {
                     try await clock.sleep(for: resetReadDelay)
                 } catch {
@@ -699,12 +810,24 @@ actor PollScheduler {
     }
 
     /// Sends the reset, and on an auth rejection refreshes once and resends
-    /// the same attempt. Each send has its own `resetTimeout`.
-    private func attemptReset(_ account: Account, adapter: any UsageProvider, attemptID: UUID) async -> ResetResult {
+    /// the same attempt. Each send has its own `resetTimeout`. `nil` means
+    /// `sendBy` passed before a send went out, so that send never happened.
+    private func attemptReset(
+        _ account: Account,
+        adapter: any UsageProvider,
+        attemptID: UUID,
+        choice: ResetKind.Key?,
+        sendBy: Date?
+    ) async -> ResetResult? {
         let store = store
         let resolver = resolver
         let clock = clock
         let timeout = Self.resetTimeout
+        // Checked last thing before each send: a credential refresh can take
+        // long enough to cross the deadline.
+        let checkWindow: @Sendable () throws -> Void = {
+            if let sendBy, clock.now() >= sendBy { throw RetryWindowClosedError() }
+        }
         do {
             let firstDeadline = clock.now().addingTimeInterval(timeout)
             let firstBudget: @Sendable () -> TimeInterval = { firstDeadline.timeIntervalSince(clock.now()) }
@@ -715,8 +838,14 @@ actor PollScheduler {
                     // (the timeout, the app quitting) sends nothing. The
                     // refresh itself is the resolver's and still finishes.
                     try Task.checkCancellation()
+                    try checkWindow()
                     do {
-                        let outcome = try await adapter.useReset(account: account, credential: credential, attemptID: attemptID)
+                        let outcome = try await adapter.useReset(
+                            account: account,
+                            credential: credential,
+                            attemptID: attemptID,
+                            choice: choice
+                        )
                         return (credential, .success(outcome))
                     } catch {
                         return (credential, .failure(error))
@@ -740,16 +869,129 @@ actor PollScheduler {
                             using: adapter
                         )
                         try Task.checkCancellation()
-                        return try await adapter.useReset(account: account, credential: fresh, attemptID: attemptID)
+                        try checkWindow()
+                        return try await adapter.useReset(account: account, credential: fresh, attemptID: attemptID, choice: choice)
                     }
                 }
                 return .outcome(outcome)
             case .failure(let error):
                 return classifyReset(error)
             }
+        } catch is RetryWindowClosedError {
+            return nil
         } catch {
             return classifyReset(error)
         }
+    }
+
+    // MARK: Unanswered attempts (providers with a retry window)
+
+    /// The log line and the one read for a reset turned away before any send.
+    private func finishWithoutSend(_ account: Account, result: ResetResult) async {
+        let completedAt = readSequence
+        await diagnostics?.record(DiagnosticEvent(
+            ts: clock.now(),
+            provider: account.provider,
+            accountID: account.id,
+            kind: .scheduler,
+            message: "Reset attempt ended: \(Self.logDescription(of: result))"
+        ))
+        await readUsageAfterReset(account.id, provider: account.provider, completedAt: completedAt)
+    }
+
+    /// Why nothing may be sent for the account now, or `nil`.
+    private func heldFor(_ accountID: UUID) -> String? {
+        if let closedAt = awaitingReadAfter[accountID] {
+            if (lastSuccessfulRead[accountID] ?? 0) > closedAt {
+                awaitingReadAfter[accountID] = nil
+            } else {
+                return "waiting for a usage read after an unanswered attempt"
+            }
+        }
+        return nil
+    }
+
+    private func closeAttempt(_ accountID: UUID) {
+        openAttempts[accountID] = nil
+        awaitingReadAfter[accountID] = readSequence
+    }
+
+    /// Whether this scheduler's adapter for the provider names a retry window,
+    /// so its attempts follow `resetAttemptState`.
+    nonisolated func hasResetRetryWindow(_ provider: Provider) -> Bool {
+        providers[provider]?.resetRetryWindow != nil
+    }
+
+    /// Where the account's reset attempt stands. `nil` when a new attempt
+    /// may start. A retryable attempt past its window reads as
+    /// `.awaitingReading` even before it is formally closed.
+    func resetAttemptState(for accountID: UUID) -> ResetAttemptState? {
+        if let open = openAttempts[accountID] {
+            if clock.now() >= open.until { return .awaitingReading }
+            return .retryable(attemptID: open.id, choice: open.choice, until: open.until)
+        }
+        if let closedAt = awaitingReadAfter[accountID], (lastSuccessfulRead[accountID] ?? 0) <= closedAt {
+            return .awaitingReading
+        }
+        return nil
+    }
+
+    /// Waits on the scheduler's clock until the attempt's retry window ends,
+    /// then closes it with nothing sent. Returns the state afterwards; the
+    /// caller then asks for the one read (`readAfterClosedAttempt`). Returns
+    /// at once when the attempt is no longer the open one, and leaves it
+    /// alone when a retry of it is running, which checks the window itself.
+    func closeAttemptWhenWindowEnds(_ accountID: UUID, attemptID: UUID) async -> ResetAttemptState? {
+        guard let open = openAttempts[accountID], open.id == attemptID else {
+            return resetAttemptState(for: accountID)
+        }
+        let wait = open.until.timeIntervalSince(clock.now())
+        if wait > 0 {
+            do {
+                try await clock.sleep(for: wait)
+            } catch {
+                return resetAttemptState(for: accountID)
+            }
+        }
+        // Checked after the lookup, which suspends: a retry may have started.
+        let account = await storedAccount(accountID)
+        guard let account, openAttempts[accountID]?.id == attemptID, !resetsInFlight.contains(accountID) else {
+            return resetAttemptState(for: accountID)
+        }
+        closeAttempt(accountID)
+        await diagnose(account, provider: account.provider, at: clock.now(),
+                       message: "Reset retry window ended; nothing sent")
+        return resetAttemptState(for: accountID)
+    }
+
+    /// The one usage read after an attempt closed, through the normal fetch
+    /// path and its backoff rules. Sends nothing when the account is no
+    /// longer held, or a reset for it is running (which reads itself).
+    func readAfterClosedAttempt(_ accountID: UUID) async -> ResetAttemptState? {
+        guard let closedAt = awaitingReadAfter[accountID], !resetsInFlight.contains(accountID),
+              let account = await storedAccount(accountID) else {
+            return resetAttemptState(for: accountID)
+        }
+        await readUsageAfterReset(accountID, provider: account.provider, completedAt: closedAt)
+        return resetAttemptState(for: accountID)
+    }
+
+    /// A login for the account finished. Its open attempt can never be
+    /// retried: the new sign-in may be another organization.
+    func accountDidSignIn(_ accountID: UUID) {
+        signIns[accountID, default: 0] += 1
+        if let open = openAttempts.removeValue(forKey: accountID) {
+            retiredAttemptIDs.insert(open.id)
+        }
+        awaitingReadAfter[accountID] = nil
+    }
+
+    /// The row was removed: nothing about its attempt is kept.
+    func forgetResetAttempt(_ accountID: UUID) {
+        if let open = openAttempts.removeValue(forKey: accountID) {
+            retiredAttemptIDs.insert(open.id)
+        }
+        awaitingReadAfter[accountID] = nil
     }
 
     private static func isAuthRejection(_ error: any Error) -> Bool {
@@ -819,6 +1061,8 @@ actor PollScheduler {
         case .outcome(.cooldown(let until)): return "cooldown until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
         case .outcome(.notAvailable): return "not available"
         case .outcome(.unexpected): return "unexpected answer"
+        case .outcome(.blocked(let reason)): return "kind blocked: \(logDescription(of: reason))"
+        case .outcome(.needsFreshReading): return "needs a fresh reading"
         case .rateLimited(let until): return "rate limited until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
         case .needsLogin: return "needs login"
         case .forbidden(let reason): return "forbidden: \(reason)"
@@ -827,6 +1071,19 @@ actor PollScheduler {
         case .unexpected: return "unexpected reply"
         case .unsupported: return "unsupported"
         case .alreadyRunning: return "already running"
+        }
+    }
+
+    /// The plain words for a blocked kind's reason. Never a provider code.
+    private static func logDescription(of reason: ResetKind.Reason) -> String {
+        switch reason {
+        case .cooldown(let until): return "cooldown until \(until.map { $0.formatted(.iso8601) } ?? "unknown")"
+        case .noneLeft: return "none left"
+        case .notStarted(let startsAt): return "starts \(startsAt.formatted(.iso8601))"
+        case .paused: return "paused"
+        case .notUsableNow: return "not usable now"
+        case .usableOnlyAtLimit: return "usable only at a limit"
+        case .nothingToGiveBack: return "nothing to give back"
         }
     }
 

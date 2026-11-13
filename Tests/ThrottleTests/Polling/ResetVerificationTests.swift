@@ -175,6 +175,108 @@ final class ResetVerificationTests: XCTestCase {
         }
     }
 
+    // MARK: ISC-521: a failed reset leaves no id on disk
+
+    /// Through the real Claude adapter and scheduler, a 403 refusal, a 429
+    /// and a 500 whose bodies echo the organization, grant and request ids
+    /// leave none of them in `diagnostics.log` or any other file the app
+    /// wrote, nor in the row's message, whichever line carried them.
+    func testFailedResetLineHidesIDs() async throws {
+        let attempt = try XCTUnwrap(UUID(uuidString: "5E17E1E1-0000-4000-8000-0000000000AA"))
+        let org = ClaudeKindsFixture.organization
+        let grant = ClaudeKindsFixture.refillGrant
+        let request = attempt.uuidString.lowercased()
+        let echo = #"{"error":"boom","org":"\#(org)","grant":"\#(grant)","request":"\#(attempt.uuidString)"}"#
+        let refusal = #"{"type":"error","error":{"type":"permission_error","message":"org \#(org) grant \#(grant) request \#(request) not allowed"}}"#
+        let cases: [(Int, String, [String: String])] = [(403, refusal, [:]), (429, echo, ["Retry-After": "30"]), (500, echo, [:])]
+        for (status, body, headers) in cases {
+            let kinds = ClaudeKindsFixture(withDiagnostics: true)
+            let account = try await kinds.addAccountAndReadOnce()
+            kinds.http.enqueue(status: status, body: Data(body.utf8), headers: headers)
+            try kinds.enqueueReading()
+
+            let result = await kinds.scheduler.useReset(accountID: account.id, attemptID: attempt, choice: .modelRefill)
+            XCTAssertEqual(try kinds.grantIDs(), [grant], "HTTP \(status): the reset went out with the marker grant")
+
+            let files = try kinds.writtenFiles()
+            let log = AppPaths(applicationSupportDirectory: kinds.fixture.directory).diagnosticsFile.lastPathComponent
+            let lines = try XCTUnwrap(files.first { $0.name == log }?.text, "HTTP \(status): no diagnostics log")
+            XCTAssertTrue(lines.contains("Reset attempt ended"), "HTTP \(status): the scheduler's line was written")
+            XCTAssertTrue(lines.contains(#""kind":"reset""#), "HTTP \(status): the adapter's line was written")
+            let notice = ResetMessages.notice(for: result, providerName: "Claude", now: kinds.clock.now())?.text ?? ""
+            for (name, text) in files + [("the row's message", notice)] {
+                for id in [org, grant, request] {
+                    XCTAssertFalse(text.localizedCaseInsensitiveContains(id), "HTTP \(status): \(name) holds \(id)")
+                }
+            }
+            await kinds.cleanUp()
+        }
+    }
+
+    // MARK: ISC-471, ISC-489, ISC-490: no grant id in a status, a message or the log
+
+    /// A kind spend, a 503 and its retry through the real Claude adapter and
+    /// scheduler: the marker grant, the organization and every request id
+    /// sent are in no encoded status, kind key, reset message or written
+    /// file, and the adapter's diagnostics line keeps its fields.
+    func testAKindSpendA503AndARetryLeaveNoIDInStatusMessagesOrLog() async throws {
+        let kinds = ClaudeKindsFixture(withDiagnostics: true)
+        let account = try await kinds.addAccountAndReadOnce()
+        let grant = ClaudeKindsFixture.refillGrant
+        let org = ClaudeKindsFixture.organization
+        let echo = #"{"error":"overloaded","grant":"\#(grant)","org":"\#(org)"}"#
+
+        kinds.enqueueResetAnswer()
+        try kinds.enqueueReading()
+        let spent = await kinds.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+        let retried = UUID()
+        kinds.http.enqueue(status: 503, body: Data(echo.utf8))
+        try kinds.enqueueReading()
+        let failed = await kinds.scheduler.useReset(accountID: account.id, attemptID: retried, choice: .modelRefill)
+        kinds.enqueueResetAnswer()
+        try kinds.enqueueReading()
+        let retry = await kinds.scheduler.useReset(accountID: account.id, attemptID: retried, choice: .modelRefill)
+
+        XCTAssertEqual([spent, failed, retry], [.outcome(.reset), .providerError(status: 503), .outcome(.reset)])
+        XCTAssertEqual(try kinds.grantIDs(), [grant, grant, grant], "every send carried the marker grant")
+        let requestIDs = try kinds.requestIDs().compactMap { $0 }
+        XCTAssertEqual(requestIDs.count, 3)
+        let needles = [grant, org] + requestIDs
+
+        let entry = try await kinds.fixture.requireEntry(account)
+        let status = String(decoding: try JSONEncoder().encode(entry), as: UTF8.self)
+        let keys = (entry.status.resetKinds ?? []).map { String(reflecting: $0.key) + String(describing: $0.key) }
+        let now = kinds.clock.now()
+        let messages = [spent, failed, retry].flatMap { result in
+            [nil, "Testmodel reset"].compactMap { label in
+                ResetMessages.notice(for: result, providerName: "Claude", now: now, kindLabel: label)?.text
+            }
+        }
+        XCTAssertFalse(messages.isEmpty)
+        let files = try kinds.writtenFiles()
+        let log = AppPaths(applicationSupportDirectory: kinds.fixture.directory).diagnosticsFile.lastPathComponent
+        let lines = try XCTUnwrap(files.first { $0.name == log }?.text).split(separator: "\n")
+        let haystacks = [("the encoded status", status)] + keys.map { ("a kind key", $0) }
+            + messages.map { ("a reset message", $0) } + files.map { ($0.name, $0.text) }
+        for (name, text) in haystacks {
+            for needle in needles {
+                XCTAssertFalse(text.localizedCaseInsensitiveContains(needle), "\(name) holds \(needle)")
+            }
+        }
+
+        let failure = try XCTUnwrap(lines.compactMap {
+            try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+        }.first { $0["kind"] as? String == "reset" && $0["status"] as? Int == 503 }, "the adapter logged the 503")
+        XCTAssertEqual(failure["provider"] as? String, "anthropic")
+        XCTAssertEqual(failure["accountID"] as? String, account.id.uuidString)
+        XCTAssertEqual(failure["url"] as? String,
+                       AnthropicEndpoints.resetRateLimits(orgUUID: AnthropicProvider.hiddenOrganizationID)?.absoluteString)
+        XCTAssertNotNil(failure["ts"])
+        XCTAssertNotNil(failure["requestHeaders"] as? [String: String])
+        XCTAssertTrue((failure["bodyPrefix"] as? String)?.contains("overloaded") == true, "the body is kept, ids aside")
+        await kinds.cleanUp()
+    }
+
     // MARK: ISC-343: sign-in needed, then a good poll re-enables the button
 
     /// A row holding resets whose token is rejected: the count stays, the
@@ -249,9 +351,9 @@ private final class IdentifierHoldingProvider: UsageProvider, @unchecked Sendabl
         try await inner.refresh(credential: credential)
     }
 
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    func useReset(account: Account, credential: AccountCredential, attemptID: UUID, choice: ResetKind.Key?) async throws -> ResetOutcome {
         let body = #"{"organization":"\#(orgUUID)","grant_id":"\#(grantID)","request_id":"\#(attemptID.uuidString.lowercased())"}"#
         lock.withLock { bodies.append(body) }
-        return try await inner.useReset(account: account, credential: credential, attemptID: attemptID)
+        return try await inner.useReset(account: account, credential: credential, attemptID: attemptID, choice: choice)
     }
 }

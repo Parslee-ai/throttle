@@ -82,9 +82,23 @@ in each provider's endpoints file and adapter (`ForbiddenEndpointTests`).
 `PollScheduler.useReset` is the only caller, and only the confirmed click in
 the detail window reaches it; no poll, timer, wake, or launch does.
 
+- **Kinds.** An account may hold more than one kind of reset (a full reset, a
+  refill for one model). The user picks one, and the choice crosses the seam
+  as a provider-neutral `ResetKind.Key`; the adapter resolves it to one of its
+  own grants at the click and never spends another kind in its place.
+- **Client name.** Claude account requests (usage, profile, reset) identify as
+  the Claude Code CLI (`AnthropicEndpoints.accountUserAgent`), because the
+  provider reports banked resets to that client only. This is undocumented and
+  may stop working. The token exchange keeps Throttle's own name.
+- **No read inside a spend.** The adapter never reads usage to spend. With no
+  reading this launch it sends nothing and answers `needsFreshReading`, and
+  the scheduler reads the account through its normal path.
 - **Idempotency key.** Every attempt carries an `attemptID`. A resend after a
   forced refresh, and a user retry after a couldn't-reach result, reuse it, so a
-  reset that went through is never spent twice.
+  reset that went through is never spent twice. For a provider with a
+  `resetRetryWindow` (Claude: ten minutes from the first send), an unanswered
+  attempt can be retried only inside it; past it, or once a retry is refused,
+  nothing is offered until a later reading succeeds.
 - **One reset per account at a time.** A second attempt while one runs sends
   nothing. Each send is bounded by `PollScheduler.resetTimeout`.
 - **Auth.** The credential comes from the poller's resolver. A 401 forces one
@@ -122,9 +136,10 @@ Tokens are the part of this app that can hurt a user, so the rules are strict.
 - **Everything user-visible passes through `Redactor`.** Error strings can echo
   a request, and a request carries a bearer token. Reset messages are also
   flattened to one line and capped at 300 characters.
-- **Reset ids stay out of storage.** A reset's attempt id, grant id, credit id
-  or organization id never goes in `accounts.json`, UserDefaults, the status
-  cache, or a log line.
+- **Reset ids stay out of storage.** A reset's attempt id, request id, grant
+  id, credit id or organization id never goes in `accounts.json`,
+  UserDefaults, the status cache, or a log line, the diagnostics log included.
+  The kind key is not an id and is stored with the row's counts.
 
 ## Polling cadence
 

@@ -240,6 +240,147 @@ final class ResetCoordinatorTests: XCTestCase {
         XCTAssertEqual(mock.fetchCount(for: b), 1)
     }
 
+    // MARK: Reset kinds
+
+    /// One Claude account reporting a full reset and a model refill, loaded
+    /// into a started model with polling stopped afterwards.
+    private func kindsHarness() async throws -> (ModelHarness, Account) {
+        let h = makeHarness()
+        let account = try await h.fixture.addAccount(.anthropic, email: "fixture-kinds")
+        h.fixture.anthropic.setResetKinds([
+            ResetKind(key: .full, label: "Full reset", count: 2),
+            ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1),
+        ])
+        await h.start()
+        await h.stopPolling()
+        return (h, account)
+    }
+
+    func testModelPassesTheChoiceAndNamesTheKindInABlockedReason() async throws {
+        let (h, a) = try await kindsHarness()
+        let mock = h.fixture.anthropic
+        mock.scriptResets([.answer(.blocked(.nothingToGiveBack))], for: a)
+
+        h.model.useReset(a, choice: .modelRefill)
+        try await task(for: a, in: h.model).value
+
+        XCTAssertEqual(mock.resetCalls.map(\.choice), [.modelRefill])
+        XCTAssertEqual(h.model.resetNotices[a.id]?.text, "No Testmodel usage to give back")
+        XCTAssertEqual(mock.fetchCount(for: a), 1, "a blocked kind reads nothing")
+    }
+
+    /// A retry of an uncertain attempt carries its id and its kind, even
+    /// after a poll replaced the kinds list.
+    func testRetryKeepsChoiceAfterAPollReplacedTheKinds() async throws {
+        let (h, a) = try await kindsHarness()
+        let mock = h.fixture.anthropic
+        mock.scriptResets([.fail(.httpStatus(502)), .answer(.reset)], for: a)
+
+        h.model.useReset(a, choice: .full)
+        try await task(for: a, in: h.model).value
+        mock.setResetKinds([
+            ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1),
+            ResetKind(key: .full, label: "Full reset", count: 5),
+        ])
+        h.model.refreshAll()
+        await h.waitForStatus("a poll replaced the kinds") { statuses in
+            statuses[a.id]?.status.resetKinds?.first { $0.key == .full }?.count == 5
+        }
+        h.model.useReset(a, choice: .full)
+        try await task(for: a, in: h.model).value
+
+        XCTAssertEqual(mock.resetCalls.count, 2)
+        XCTAssertEqual(mock.resetCalls[0].attemptID, mock.resetCalls[1].attemptID, "the retry is the same attempt")
+        XCTAssertEqual(mock.resetCalls.map(\.choice), [.full, .full])
+    }
+
+    /// While an attempt for one kind is unresolved, a click on another kind
+    /// sends nothing and leaves the pending attempt as it was.
+    func testOtherKindWhilePendingSendsNothing() async throws {
+        let (h, a) = try await kindsHarness()
+        let mock = h.fixture.anthropic
+        mock.scriptResets([.fail(.httpStatus(502)), .answer(.reset)], for: a)
+
+        h.model.useReset(a, choice: .full)
+        try await task(for: a, in: h.model).value
+        let noticeAfterFailure = h.model.resetNotices[a.id]
+
+        h.model.useReset(a, choice: .modelRefill)
+        XCTAssertNil(h.model.resetTasks[a.id], "nothing started")
+        XCTAssertFalse(h.model.resetsInFlight.contains(a.id))
+        XCTAssertEqual(mock.resetCount, 1, "nothing sent")
+        XCTAssertEqual(h.model.resetNotices[a.id], noticeAfterFailure, "the row keeps the earlier result")
+
+        h.model.useReset(a, choice: .full)
+        try await task(for: a, in: h.model).value
+        XCTAssertEqual(mock.resetCalls.map(\.choice), [.full, .full])
+        XCTAssertEqual(mock.resetCalls[0].attemptID, mock.resetCalls[1].attemptID, "the pending id was unchanged")
+    }
+
+    /// Quitting while a kind spend is out, over the real Claude adapter:
+    /// the files the app keeps stay readable and hold no reset id, and the
+    /// next launch offers no retry and spends with a new request id.
+    func testQuitDuringKindSpendLeavesFilesValidAndNoPendingAttempt() async throws {
+        let kinds = ClaudeKindsFixture()
+        let h = ModelHarness(fixture: kinds.fixture, scheduler: kinds.scheduler)
+        harnesses.append(h)
+        let a = try await kinds.fixture.addAccount(.anthropic, email: "fixture-kinds")
+        try kinds.enqueueReading()
+        kinds.enqueueProfile()
+        await h.start()
+        await h.stopPolling()
+        kinds.enqueueResetAnswer()
+        kinds.posts.hold()
+
+        h.model.useReset(a, choice: .modelRefill)
+        let running = try task(for: a, in: h.model)
+        await waitUntil("the spend was sent") { kinds.postRequests.count == 1 }
+        running.cancel()
+        await running.value
+        // Quitting writes the cache's newest state, then stops.
+        await h.persistence.record(await kinds.fixture.cache.snapshot())
+        await h.persistence.flush()
+        await h.persistence.stop()
+        kinds.posts.release()
+
+        let firstRequest = try XCTUnwrap(try kinds.requestIDs().first ?? nil)
+        let cacheData = try Data(contentsOf: h.paths.statusCacheFile)
+        let decoded = try StatusCachePersistence.decode(cacheData)
+        XCTAssertEqual(decoded[a.id]?.status.accountID, a.id, "the status cache decodes")
+        XCTAssertNotNil(decoded[a.id]?.status.resetKinds, "with the row's kinds")
+        let accountsData = try Data(contentsOf: h.paths.accountsFile)
+        for data in [cacheData, accountsData] {
+            let text = String(decoding: data, as: UTF8.self)
+            for id in [firstRequest, ClaudeKindsFixture.refillGrant, ClaudeKindsFixture.organization] {
+                XCTAssertFalse(text.lowercased().contains(id.lowercased()), "a reset id reached disk")
+            }
+        }
+
+        // The next launch: a new store, cache, adapter and scheduler.
+        let next = ClaudeKindsFixture(fixture: kinds.fixture.relaunched())
+        let relaunched = ModelHarness(fixture: next.fixture, scheduler: next.scheduler)
+        harnesses.append(relaunched)
+        let stored = try await next.fixture.store.load()
+        XCTAssertEqual(stored.map(\.id), [a.id], "accounts.json decodes")
+        let credential = try await next.fixture.store.credential(for: a.id)
+        XCTAssertNotNil(credential, "the Keychain item is intact")
+        try next.enqueueReading()
+        next.enqueueProfile()
+        await relaunched.start()
+        await relaunched.stopPolling()
+        let state = await next.scheduler.resetAttemptState(for: a.id)
+        XCTAssertNil(state, "no attempt carried over")
+        XCTAssertNil(relaunched.model.resetGates[a.id], "no retry offered")
+
+        next.enqueueResetAnswer()
+        try next.enqueueReading()
+        relaunched.model.useReset(a, choice: .modelRefill)
+        try await task(for: a, in: relaunched.model).value
+        let secondRequest = try XCTUnwrap(try next.requestIDs().first ?? nil)
+        XCTAssertNotEqual(secondRequest, firstRequest, "a new attempt, not the old one resent")
+        XCTAssertEqual(relaunched.model.resetNotices[a.id]?.kind, .success)
+    }
+
     // MARK: Hosting
 
     private static func host<V: View>(_ view: V) -> NSWindow {

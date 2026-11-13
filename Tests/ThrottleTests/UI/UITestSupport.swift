@@ -39,7 +39,8 @@ enum UIFixtures {
         isStale: Bool = false,
         fetchedAt: Date = now,
         planLabel: String? = nil,
-        resetCreditsAvailable: Int? = nil
+        resetCreditsAvailable: Int? = nil,
+        resetKinds: [ResetKind]? = nil
     ) -> CachedStatus {
         let status = AccountStatus(
             accountID: account.id,
@@ -49,7 +50,8 @@ enum UIFixtures {
             fetchedAt: fetchedAt,
             state: state,
             planLabel: planLabel,
-            resetCreditsAvailable: resetCreditsAvailable
+            resetCreditsAvailable: resetCreditsAvailable,
+            resetKinds: resetKinds
         )
         return CachedStatus(
             status: status,

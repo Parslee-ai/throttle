@@ -20,8 +20,15 @@ struct AnthropicProvider: UsageProvider {
     /// by every copy of this provider, so the profile is read at most once
     /// per account per launch.
     private let plans = ProfilePlanCache()
-    /// The grant each account's last usage read would spend, in memory only.
+    /// Each account's last reset-block reading and its reset attempt's pin,
+    /// in memory only.
     private let grants = ResetGrantCache()
+    /// Which reset-block diagnostics lines were written this launch.
+    private let notes = ResetBlockNotes()
+
+    /// How long a retry of an unanswered reset may reuse its request id: the
+    /// lifetime Claude's own client relies on for it.
+    var resetRetryWindow: TimeInterval? { 600 }
     /// Longest the one-time plan read may add to a usage read. It is also
     /// capped by what is left of the scheduler's budget for the fetch
     /// (`FetchBudget`), less `profileMargin`, so a slow profile can never turn
@@ -63,11 +70,17 @@ struct AnthropicProvider: UsageProvider {
         if Self.isConsoleToken(credential) {
             throw UsageError.needsLogin
         }
+        // A response requested before a sign-in describes the earlier
+        // sign-in: it must not put that sign-in's grants or plan back.
+        let generation = await grants.generation(account.id)
         let body = try await readUsage(accountID: account.id, credential: credential)
         let windows = try AnthropicUsageParser.parse(body)
         let resets = AnthropicResetParser.parse(body)
-        await grants.remember(resets.selectedGrantID, for: account.id)
+        let modelName = AnthropicResetGrants.modelName(from: windows)
+        await grants.remember(resets, for: account.id, generation: generation)
+        await noteResetBlock(resets, accountID: account.id)
         let fetchedAt = now()
+        let kinds = resets.kinds(at: fetchedAt, modelName: modelName)
         return AccountStatus(
             accountID: account.id,
             provider: .anthropic,
@@ -75,9 +88,36 @@ struct AnthropicProvider: UsageProvider {
             windows: windows,
             fetchedAt: fetchedAt,
             state: .ok,
-            planLabel: await planLabel(for: account, credential: credential),
-            resetCreditsAvailable: resets.count
+            planLabel: await planLabel(for: account, credential: credential, generation: generation),
+            resetCreditsAvailable: resets.count.map { _ in 0 },
+            resetKinds: kinds
         )
+    }
+
+    /// Requests that identify as Claude's own client are only worth anything
+    /// while that client name is current, so the two silent ways a row can
+    /// lose its resets column are written down: a block that yields no count
+    /// (with the rule that failed), and a block that says the account is not
+    /// eligible (with the reason, from a fixed list). Each at most once per
+    /// account per launch, the second again when its reason changes. Neither
+    /// carries a grant id or label, and neither reaches the screen.
+    private func noteResetBlock(_ resets: AnthropicResetGrants, accountID: UUID) async {
+        guard let diagnostics else { return }
+        var message: String?
+        if let rule = resets.noCountRule, await notes.firstNoCount(accountID) {
+            message = "Reset block yields no count: \(rule)"
+        }
+        if let reason = resets.ineligibleReason, await notes.ineligibleChanged(accountID, to: reason) {
+            message = "Resets not offered: \(reason)"
+        }
+        guard let message else { return }
+        await diagnostics.record(DiagnosticEvent(
+            ts: now(),
+            provider: .anthropic,
+            accountID: accountID,
+            kind: .usage,
+            message: message
+        ))
     }
 
     /// One usage request. The body on a 200; every other answer is thrown as
@@ -132,8 +172,9 @@ struct AnthropicProvider: UsageProvider {
     /// `error` object, or a different error type). The shape is
     /// `{"type":"error","error":{"type":"permission_error","message":"…",
     /// "details":{"error_code":"oauth_not_allowed_for_organization"}}}`; a
-    /// `details.error_code` counts even if the type name changes.
-    static func permissionRefusal(in body: Data) -> String? {
+    /// `details.error_code` counts even if the type name changes. `ids` are
+    /// removed before the message is cut, so none survives in part.
+    static func permissionRefusal(in body: Data, hiding ids: [String] = []) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: body),
               let root = json as? [String: Any],
               let error = root["error"] as? [String: Any] else {
@@ -147,14 +188,14 @@ struct AnthropicProvider: UsageProvider {
         if message.isEmpty {
             message = code.map { "Not allowed by organization (\($0))" } ?? "Not allowed by organization"
         }
-        return Redactor.redact(String(message.prefix(300)))
+        return Redactor.capped(message, hiding: ids, maxLength: 300)
     }
 
-    /// The first 300 bytes of an error body, redacted, for the log. The body
-    /// is the provider's error object, never a token, but it is redacted and
-    /// capped all the same.
+    /// The first 300 characters of an error body, redacted, for the log. The
+    /// body is the provider's error object, never a token, but it is redacted
+    /// and capped all the same.
     private static func snippet(_ body: Data) -> String {
-        Redactor.redact(String(decoding: body.prefix(300), as: UTF8.self))
+        Redactor.capped(String(decoding: body, as: UTF8.self), maxLength: 300)
     }
 
     // MARK: - Profile
@@ -192,18 +233,16 @@ struct AnthropicProvider: UsageProvider {
         return .read(profile)
     }
 
-    /// Forgets the plan, the organization id, any wait, and the reset grant
-    /// for this account, so the next poll reads them again with the new
-    /// sign-in and a reset goes to the new sign-in's organization.
-    ///
-    /// The grant pinned to the latest reset attempt is kept. The app keeps an
-    /// unconfirmed attempt's id across a sign-in, and that attempt may have
-    /// already spent its grant; sending the same id to a freshly selected
-    /// grant could spend a second one. `useReset` drops the pin only once it
-    /// knows the new sign-in belongs to a different organization.
+    /// Forgets the plan, the organization id, any wait, the reset reading,
+    /// and the pending reset attempt with its kind and pinned grant, so the
+    /// next poll reads them again with the new sign-in and the next click is
+    /// a new attempt for the newly signed-in account. The forgotten attempt's
+    /// id is never sent again: a retry never goes to an organization other
+    /// than its first send's. Responses requested before this call arrive
+    /// too late to put anything back.
     func accountDidSignIn(_ accountID: UUID) async {
         await plans.forget(accountID)
-        await grants.forgetSelection(accountID)
+        await grants.signIn(accountID)
     }
 
     /// The account's plan, read from the profile once per launch with the
@@ -219,7 +258,7 @@ struct AnthropicProvider: UsageProvider {
     ///   the next poll. Nothing reached the provider's answer, no diagnostics
     ///   line is written, the read is bounded by the time budget, and polls
     ///   are at least a minute apart.
-    private func planLabel(for account: Account, credential: AccountCredential) async -> String? {
+    private func planLabel(for account: Account, credential: AccountCredential, generation: Int) async -> String? {
         if let known = await plans.known(for: account.id) {
             return known.plan
         }
@@ -235,6 +274,7 @@ struct AnthropicProvider: UsageProvider {
 
         switch await boundedProfileRead(credential: credential, accountID: account.id, budget: budget) {
         case .answered(.read(let profile)):
+            guard await grants.generation(account.id) == generation else { return nil }
             await plans.remember(profile, for: account.id)
             return profile.planLabel
         case .answered(.refused(let retryAfter)):
@@ -274,65 +314,94 @@ struct AnthropicProvider: UsageProvider {
 
     // MARK: - Reset
 
-    /// Spends one banked limit reset: the one call in this adapter that
-    /// spends anything, made only from an explicit, confirmed user action
-    /// (see `UsageProvider.useReset`).
+    /// Spends one banked limit reset of the kind the owner chose: the one
+    /// call in this adapter that spends anything, made only from an
+    /// explicit, confirmed user action (see `UsageProvider.useReset`).
     ///
-    /// Sends at most one usage read (when no grant is known yet), at most one
+    /// Never reads usage. A new attempt resolves `choice` against the last
+    /// reading this launch, judged by the clock at the click: no reading
+    /// sends nothing and answers `.needsFreshReading`; a kind with nothing
+    /// spendable sends nothing and answers `.blocked` with its reason; a kind
+    /// that vanished answers `.notAvailable`. Another kind is never spent in
+    /// its place, and no choice never spends on an account that reports
+    /// kinds. A resend of an attempt goes to the grant and organization it
+    /// was first sent to, whatever a later reading says. Sends at most one
     /// profile read (when the organization id is not known and the profile is
-    /// not on hold), then one POST. It never refreshes the token itself: a 401
-    /// is thrown as `needsLogin` for the scheduler's serialized refresh and
-    /// resend with the same `attemptID`.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    /// not on hold), then one POST. It never refreshes the token itself: a
+    /// 401 is thrown as `needsLogin` for the scheduler's serialized refresh
+    /// and resend with the same `attemptID`.
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome {
         if Self.isConsoleToken(credential) {
             throw UsageError.needsLogin
         }
+        let generation = await grants.generation(account.id)
+        // A choice made before a sign-in may name another organization's
+        // kinds: nothing is sent and the read that follows shows the new ones.
+        if await grants.isRetired(attemptID, for: account.id) {
+            return .notAvailable
+        }
 
-        // A resend of an attempt that has already been sent goes to the grant
-        // that attempt first named, whatever a later read selects. The
-        // request id is the idempotency key only together with its grant: the
-        // same id sent to another grant could spend that one too. The pin
-        // survives a sign-in, so it is checked against the current
-        // organization first: a sign-in to another organization makes the
-        // attempt a fresh one there.
+        // The request id is the idempotency key only together with its
+        // grant: the same id sent to another grant could spend that one too.
         let grantID: String
         let orgUUID: String
         if let pin = await grants.pinned(account.id, attemptID: attemptID) {
-            guard let current = try await organizationUUID(for: account, credential: credential) else {
+            guard pin.choice == choice else {
+                throw UsageError.invalidResponse("reset not sent: the attempt was started for another kind")
+            }
+            grantID = pin.grantID
+            orgUUID = pin.organizationUUID
+        } else {
+            guard let reading = await grants.reading(account.id) else {
+                // A reading dropped by a sign-in means the pick predates it.
+                return await grants.wasDroppedBySignIn(account.id) ? .notAvailable : .needsFreshReading
+            }
+            // No kind at all to spend, whichever was picked.
+            guard reading.kinds(at: now(), modelName: nil) != nil else { return .noCredit }
+            // The row offered no kinds but the account has them: the owner
+            // picks again from the fresh reading.
+            guard let choice else { return .needsFreshReading }
+            switch reading.resolve(choice, at: now()) {
+            case .grant(let id): grantID = id
+            case .blocked(let reason): return .blocked(reason)
+            case .absent: return .notAvailable
+            }
+            guard let current = try await organizationUUID(for: account, credential: credential, generation: generation) else {
                 // The profile names no organization, so there is nowhere to
                 // send a reset for this sign-in.
                 return .notAvailable
             }
             orgUUID = current
-            if pin.organizationUUID == current {
-                grantID = pin.grantID
-            } else {
-                await grants.unpin(account.id)
-                guard let selected = try await selectedGrant(for: account, credential: credential) else { return .noCredit }
-                grantID = selected
-            }
-        } else {
-            guard let selected = try await selectedGrant(for: account, credential: credential) else { return .noCredit }
-            guard let current = try await organizationUUID(for: account, credential: credential) else {
-                return .notAvailable
-            }
-            grantID = selected
-            orgUUID = current
         }
+        guard await grants.generation(account.id) == generation else { return .notAvailable }
 
+        let requestID = attemptID.uuidString.lowercased()
         let request = try resetRequest(
             organizationUUID: orgUUID,
             grantID: grantID,
-            requestID: attemptID.uuidString.lowercased(),
+            requestID: requestID,
             accessToken: credential.accessToken
         )
         // Pin before the send: once the POST may have reached the provider,
-        // every resend of this attempt to this organization names the same
-        // grant.
-        await grants.pin(grantID, organizationUUID: orgUUID, for: account.id, attemptID: attemptID)
+        // every resend of this attempt names the same grant and organization.
+        await grants.pin(grantID, organizationUUID: orgUUID, choice: choice, for: account.id, attemptID: attemptID)
+        // Before the send, so no line about this attempt, the adapter's or
+        // the scheduler's, can carry its ids. The URL's stand-in for the
+        // organization is public and stays readable.
+        await diagnostics?.hide([orgUUID, grantID, requestID].filter { $0 != Self.hiddenOrganizationID })
         let response = try await send(request)
         if response.statusCode != 200 {
-            await diagnose(.reset, accountID: account.id, request: request, response: response, retryAfter: retryAfter(from: response))
+            await diagnoseReset(
+                accountID: account.id,
+                request: request,
+                response: response,
+                hiding: [orgUUID, grantID, requestID]
+            )
         }
 
         switch response.statusCode {
@@ -342,7 +411,8 @@ struct AnthropicProvider: UsageProvider {
             Self.logger.error("Reset rejected with HTTP 401")
             throw UsageError.needsLogin
         case 403:
-            if let message = Self.permissionRefusal(in: response.body) {
+            // The provider's words reach the row; the attempt's ids do not.
+            if let message = Self.permissionRefusal(in: response.body, hiding: [orgUUID, grantID, requestID]) {
                 Self.logger.error("Reset forbidden for this organization: \(message, privacy: .public)")
                 throw UsageError.forbidden(reason: message)
             }
@@ -358,20 +428,39 @@ struct AnthropicProvider: UsageProvider {
         }
     }
 
-    /// The grant a new attempt spends. Reads usage only when no poll this
-    /// launch has read the grant block for this account. A read that found no
-    /// grant with a reset left is cached too, and answers `nil` with no
-    /// request. A 429 here is thrown as `rateLimited` with its `Retry-After`;
-    /// the scheduler keeps resets off while the account is under a backoff
-    /// horizon.
-    private func selectedGrant(for account: Account, credential: AccountCredential) async throws -> String? {
-        if let known = await grants.lookup(account.id) {
-            return known
+    /// Stands in for the organization id in a failed reset's diagnostics
+    /// URL, so the line keeps the URL's shape and names no organization.
+    static let hiddenOrganizationID = "00000000-0000-0000-0000-000000000000"
+
+    /// The diagnostics line for a failed reset request. The organization id
+    /// in the URL is replaced, and the organization, grant and request ids
+    /// are removed from the body before it is cut to length, so half an id
+    /// cannot survive at the cut.
+    private func diagnoseReset(accountID: UUID, request: URLRequest, response: HTTPResponse, hiding ids: [String]) async {
+        guard let diagnostics else { return }
+        let scrubbed = HTTPResponse(
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: Data(Self.removing(ids, from: String(decoding: response.body, as: UTF8.self)).utf8)
+        )
+        var event = DiagnosticEvent(
+            ts: now(),
+            provider: .anthropic,
+            accountID: accountID,
+            kind: .reset,
+            request: request,
+            response: scrubbed,
+            retryAfter: retryAfter(from: response)
+        )
+        event.url = Self.removing(ids, from: event.url, with: Self.hiddenOrganizationID)
+        await diagnostics.record(event)
+    }
+
+    /// `text` with every occurrence of each id replaced, in any letter case.
+    private static func removing(_ ids: [String], from text: String, with replacement: String = "[id]") -> String {
+        ids.filter { !$0.isEmpty }.reduce(text) { out, id in
+            out.replacingOccurrences(of: id, with: replacement, options: .caseInsensitive)
         }
-        let body = try await readUsage(accountID: account.id, credential: credential)
-        let selected = AnthropicResetParser.parse(body).selectedGrantID
-        await grants.remember(selected, for: account.id)
-        return selected
     }
 
     /// The reset POST. Throws, and so sends nothing, when an id fails its
@@ -398,8 +487,9 @@ struct AnthropicProvider: UsageProvider {
     /// The account's organization id: from the profile already read this
     /// launch, else from one profile read that shares the plan's cache and
     /// hold. A profile on hold, or a read that is refused, throws
-    /// `rateLimited` with the time left on the hold, and nothing is sent.
-    private func organizationUUID(for account: Account, credential: AccountCredential) async throws -> String? {
+    /// `rateLimited` with the time left on the hold, and nothing is sent. A
+    /// profile requested before a sign-in is not kept.
+    private func organizationUUID(for account: Account, credential: AccountCredential, generation: Int) async throws -> String? {
         if let known = await plans.known(for: account.id) {
             return known.organizationUUID
         }
@@ -409,6 +499,7 @@ struct AnthropicProvider: UsageProvider {
         }
         switch try await requestProfile(credential: credential, accountID: account.id) {
         case .read(let profile):
+            guard await grants.generation(account.id) == generation else { return nil }
             await plans.remember(profile, for: account.id)
             return profile.organizationUUID
         case .refused(let retryAfter):
@@ -464,7 +555,7 @@ struct AnthropicProvider: UsageProvider {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.tokenUserAgent, forHTTPHeaderField: "User-Agent")
         let body: [String: String] = [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
@@ -480,7 +571,7 @@ struct AnthropicProvider: UsageProvider {
         request.httpShouldHandleCookies = false
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.tokenUserAgent, forHTTPHeaderField: "User-Agent")
         let fields: [(String, String)] = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken),
@@ -560,7 +651,7 @@ struct AnthropicProvider: UsageProvider {
         request.setValue(AnthropicEndpoints.betaHeader, forHTTPHeaderField: "anthropic-beta")
         request.setValue(AnthropicEndpoints.apiVersion, forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AnthropicEndpoints.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AnthropicEndpoints.accountUserAgent, forHTTPHeaderField: "User-Agent")
         return request
     }
 
@@ -667,33 +758,48 @@ private actor ProfilePlanCache {
     }
 }
 
-/// The grant each account's last successful usage read selected, so a reset
-/// usually needs no usage read of its own, and the grant and organization
-/// each account's latest reset attempt was sent to. Memory only: a grant id,
+/// Each account's last reset-block reading, and the grant, organization and
+/// kind its pending reset attempt was sent with. Memory only: a grant id,
 /// organization id, or attempt id is never persisted.
 private actor ResetGrantCache {
     struct Pin: Sendable {
         let attemptID: UUID
         let grantID: String
         let organizationUUID: String
+        let choice: ResetKind.Key?
     }
 
-    /// Present once a usage read this launch has seen the account; the value
-    /// is `nil` when that read found no grant with a reset left.
-    private var selected: [UUID: String?] = [:]
-    /// The latest attempt sent for each account, the grant it named, and the
-    /// organization it went to. Only one attempt per account is kept: a new
-    /// attempt replaces it.
+    private var readings: [UUID: AnthropicResetGrants] = [:]
+    /// Accounts whose reading a sign-in dropped.
+    private var droppedBySignIn: Set<UUID> = []
+    /// The latest attempt sent for each account. Only one attempt per
+    /// account is kept: a new attempt replaces it.
     private var pins: [UUID: Pin] = [:]
+    /// Attempts a sign-in made obsolete, never to be sent again.
+    private var retired: [UUID: Set<UUID>] = [:]
+    /// Bumped by every sign-in. A response requested under an older value
+    /// belongs to an earlier sign-in.
+    private var generations: [UUID: Int] = [:]
 
-    /// `nil` when the account has not been read this launch; `.some(nil)`
-    /// when its last read found no grant to spend.
-    func lookup(_ id: UUID) -> String?? {
-        selected[id]
+    func generation(_ id: UUID) -> Int {
+        generations[id, default: 0]
     }
 
-    func remember(_ grantID: String?, for id: UUID) {
-        selected[id] = .some(grantID)
+    /// The account's last reading, `nil` when none was taken this launch (or
+    /// since its last sign-in).
+    func reading(_ id: UUID) -> AnthropicResetGrants? {
+        readings[id]
+    }
+
+    func wasDroppedBySignIn(_ id: UUID) -> Bool {
+        droppedBySignIn.contains(id)
+    }
+
+    /// Keeps a reading, unless a sign-in happened after it was requested.
+    func remember(_ reading: AnthropicResetGrants, for id: UUID, generation: Int) {
+        guard generations[id, default: 0] == generation else { return }
+        readings[id] = reading
+        droppedBySignIn.remove(id)
     }
 
     /// The pin this attempt was first sent with, or `nil` when the account's
@@ -703,23 +809,47 @@ private actor ResetGrantCache {
         return pin
     }
 
-    /// Records the grant and organization an attempt is sent to. A pin
-    /// already held for the same attempt is kept, so the first send decides.
-    func pin(_ grantID: String, organizationUUID: String, for id: UUID, attemptID: UUID) {
+    /// Records where an attempt is sent. A pin already held for the same
+    /// attempt is kept, so the first send decides.
+    func pin(_ grantID: String, organizationUUID: String, choice: ResetKind.Key?, for id: UUID, attemptID: UUID) {
         if let pin = pins[id], pin.attemptID == attemptID { return }
-        pins[id] = Pin(attemptID: attemptID, grantID: grantID, organizationUUID: organizationUUID)
+        pins[id] = Pin(attemptID: attemptID, grantID: grantID, organizationUUID: organizationUUID, choice: choice)
     }
 
-    /// Drops the account's pin, once its attempt is known to belong to an
-    /// organization the account no longer signs in to.
-    func unpin(_ id: UUID) {
-        pins.removeValue(forKey: id)
+    func isRetired(_ attemptID: UUID, for id: UUID) -> Bool {
+        retired[id]?.contains(attemptID) == true
     }
 
-    /// Forgets the selected grant after a sign-in. The pin is kept: see
-    /// `AnthropicProvider.accountDidSignIn`.
-    func forgetSelection(_ id: UUID) {
-        selected.removeValue(forKey: id)
+    /// A sign-in: the reading, the pin and its kind are forgotten, the
+    /// pinned attempt is never sent again, and anything requested before now
+    /// is too old to keep.
+    func signIn(_ id: UUID) {
+        if readings.removeValue(forKey: id) != nil {
+            droppedBySignIn.insert(id)
+        }
+        if let pin = pins.removeValue(forKey: id) {
+            retired[id, default: []].insert(pin.attemptID)
+        }
+        generations[id, default: 0] += 1
+    }
+}
+
+/// Which reset-block diagnostics lines each account has had this launch.
+private actor ResetBlockNotes {
+    private var noCount: Set<UUID> = []
+    private var ineligible: [UUID: String] = [:]
+
+    /// True the first time an account's block yields no count.
+    func firstNoCount(_ id: UUID) -> Bool {
+        noCount.insert(id).inserted
+    }
+
+    /// True the first time an account is not eligible, and again whenever
+    /// the reason changes.
+    func ineligibleChanged(_ id: UUID, to reason: String) -> Bool {
+        guard ineligible[id] != reason else { return false }
+        ineligible[id] = reason
+        return true
     }
 }
 

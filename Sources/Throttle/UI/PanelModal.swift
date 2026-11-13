@@ -111,6 +111,8 @@ struct ConfirmationCard<Details: View>: View {
     let confirmTitle: String
     var confirmRole: ButtonRole?
     var width: CGFloat = 380
+    /// Greys the confirm button, for a question that needs an answer first.
+    var confirmDisabled = false
     let onConfirm: @MainActor () -> Void
     let onCancel: @MainActor () -> Void
     @ViewBuilder let details: () -> Details
@@ -130,6 +132,7 @@ struct ConfirmationCard<Details: View>: View {
             HStack(spacing: 8) {
                 Spacer()
                 Button(confirmTitle, role: confirmRole) { onConfirm() }
+                    .disabled(confirmDisabled)
                     .focused($focus, equals: .confirm)
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.defaultAction)

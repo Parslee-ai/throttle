@@ -100,8 +100,14 @@ struct OpenAIProvider: UsageProvider {
     /// with the same `attemptID`. The attempt id goes out as
     /// `redeem_request_id`, so a resend of an attempt that already went
     /// through answers `already_redeemed` instead of spending a second reset.
-    /// No `credit_id` is sent, so the provider picks the credit.
-    func useReset(account: Account, credential: AccountCredential, attemptID: UUID) async throws -> ResetOutcome {
+    /// No `credit_id` is sent, so the provider picks the credit. Codex reports
+    /// one unnamed kind, so `choice` is ignored and never reaches the wire.
+    func useReset(
+        account: Account,
+        credential: AccountCredential,
+        attemptID: UUID,
+        choice: ResetKind.Key?
+    ) async throws -> ResetOutcome {
         var request = URLRequest(url: OpenAIEndpoints.resetConsumeURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
@@ -284,7 +290,7 @@ struct OpenAIProvider: UsageProvider {
         guard type.contains("permission") || type.contains("forbidden") else { return nil }
         var text = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if text.isEmpty { text = "Not allowed by organization (\(type))" }
-        return Redactor.redact(String(text.prefix(300)))
+        return Redactor.capped(text, maxLength: 300)
     }
 
     private static func retryAfter(from response: HTTPResponse) -> TimeInterval? {

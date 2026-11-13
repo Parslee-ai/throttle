@@ -24,8 +24,12 @@ Throttle reads; it does not spend. Checking your limits never sends a prompt,
 spends a token, or changes anything on your account. The one exception is a
 banked limit reset: when an account has resets available, its row shows a
 **Use reset** button, and Throttle spends one only after you click it and
-confirm. It then reads that account's limits again and shows the provider's
-fresh numbers.
+confirm. An account may hold more than one kind of reset, such as a full reset
+and a refill for one model; the row shows how many of each are left, and
+Throttle spends the one you click. It then reads that account's limits again
+and shows the provider's fresh numbers. If a Claude reset gets no answer, you
+can retry it for ten minutes and the retry can never spend a second one; after
+that, Throttle offers nothing until it has read the account again.
 
 ## Install
 
@@ -109,13 +113,19 @@ without notice, and if that happens Throttle will show an error on the affected
 accounts until it is updated. This is the tradeoff for reading subscription
 usage at all: there is no official API for it.
 
+Throttle's requests for a Claude account identify as the Claude Code CLI,
+because Claude reports banked resets to that client only. This is undocumented
+too and may stop working.
+
 Throttle polls every five minutes per account by default, never faster than
 once a minute, and backs off when a provider asks it to. The ten-second menu bar
 rotation reads cached data and never triggers a network request.
 
-Nothing leaves your Mac except those two requests, the OAuth token exchanges,
-and, only when you click **Check for Updates**, the update check against this
-repository's GitHub Releases. There is no analytics, no crash reporting, and no
+Nothing leaves your Mac except those two requests, a profile read for each
+Claude account, a reset you confirm, the OAuth token exchanges, and, only
+when you click **Check for Updates**, the update check against this
+repository's GitHub Releases. Reset ids are never written to disk, the
+diagnostics log included. There is no analytics, no crash reporting, and no
 automatic update check.
 
 ## Building from source

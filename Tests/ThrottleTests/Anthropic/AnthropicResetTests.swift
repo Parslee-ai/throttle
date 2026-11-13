@@ -55,7 +55,7 @@ final class AnthropicResetTests: XCTestCase {
 
     // MARK: Reading the count
 
-    func testUsageQueryItemsAreExactAndTheUserAgentIsThrottles() async throws {
+    func testUsageQueryItemsAreExactAndTheClientNameIsClaudeCodes() async throws {
         let client = AnthropicMockHTTPClient()
         _ = try await primedProvider(client)
         let usage = try XCTUnwrap(client.requests.first)
@@ -68,8 +68,7 @@ final class AnthropicResetTests: XCTestCase {
             URLQueryItem(name: "cedar_ember", value: "1"),
         ])
         let agent = try XCTUnwrap(usage.value(forHTTPHeaderField: "User-Agent"))
-        XCTAssertTrue(agent.hasPrefix("throttle/"), agent)
-        XCTAssertFalse(agent.lowercased().contains("claude"), "never Claude Code's user agent")
+        XCTAssertEqual(agent, "claude-cli/2.1.322 (external, cli)", "the provider reports resets to the Claude Code client only")
         XCTAssertNil(usage.value(forHTTPHeaderField: "x-app"))
     }
 
@@ -124,7 +123,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client)
         client.enqueue(status: 200, body: Data(#"{"result":"reset","resets_left":2,"cleared":["five_hour"]}"#.utf8))
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(outcome, .reset)
 
         XCTAssertEqual(client.requests.count, 3)
@@ -156,38 +155,39 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"not_limited"}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"not_limited"}"#.utf8))
 
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 1)
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.usage }.count, 1)
     }
 
-    /// A reset before any poll this launch learns the grant with one usage
-    /// read and the organization with one profile read; the next poll then
-    /// reads no profile.
-    func testResetBeforeAnyPollLearnsGrantAndOrganizationOnce() async throws {
+    /// A reset before any poll this launch sends nothing at all, not even a
+    /// usage read: it asks for a reading, which the scheduler makes through
+    /// its normal path. The click after that reading spends.
+    func testResetBeforeAnyPollSendsNothingAndAsksForAReading() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try twoGrants())
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
-        client.enqueue(status: 200, body: try twoGrants())
         let provider = makeProvider(client)
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        XCTAssertEqual(outcome, .reset)
+        let early = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(early, .needsFreshReading)
+        XCTAssertTrue(client.requests.isEmpty)
+
         let status = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(status.planLabel, "max 20x")
-        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL, AnthropicEndpoints.usage])
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(outcome, .reset)
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL])
     }
 
-    func testRateLimitedUsageReadDuringResetSendsNothingMore() async throws {
+    /// A spend never reads usage itself, so a usage endpoint that would
+    /// answer 429 is never asked.
+    func testResetWithoutAReadingMakesNoUsageRead() async throws {
         let client = AnthropicMockHTTPClient(status: 429, headers: ["Retry-After": "120"])
-        do {
-            _ = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
-            XCTFail("expected rateLimited")
-        } catch UsageError.rateLimited(let retryAfter) {
-            XCTAssertEqual(retryAfter, 120)
-        }
-        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage])
+        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(outcome, .needsFreshReading)
+        XCTAssertTrue(client.requests.isEmpty)
     }
 
     /// The clean usage fixture with `cedar_ember` set to `block`.
@@ -197,13 +197,23 @@ final class AnthropicResetTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: root)
     }
 
-    /// Grants are listed but none has a reset left: no credit, and no POST.
-    func testGrantsWithNoResetsLeftAreNoCreditWithoutAPost() async throws {
+    /// Grants are listed but none has a reset left. With no reading yet the
+    /// spend sends nothing at all; after a reading it answers that the kind
+    /// has none left, and still sends no POST.
+    func testGrantsWithNoResetsLeftAreNoneLeftWithoutAPost() async throws {
         let body = try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":0,"usable_now":true},{"id":"grant_test_b","resets_left":0}]}"#)
         let client = AnthropicMockHTTPClient(status: 200, body: body)
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
-        XCTAssertEqual(outcome, .noCredit)
-        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage])
+        client.enqueue(status: 200, body: try profileBody())
+        let provider = makeProvider(client)
+
+        let early = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(early, .needsFreshReading)
+        XCTAssertTrue(client.requests.isEmpty)
+
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(outcome, .blocked(.noneLeft))
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile])
     }
 
     /// A poll that found nothing to spend is remembered: the reset answers
@@ -215,15 +225,15 @@ final class AnthropicResetTests: XCTestCase {
         _ = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(client.requests.count, 2)
 
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertEqual(client.requests.count, 2, "no usage read, no profile read, no POST")
     }
 
-    /// A counted grant that is not usable now is still sent, so the button
-    /// never shows a count it cannot act on; the provider answers for itself.
-    func testNonUsableGrantIsSentAndTheProviderAnswers() async throws {
-        let body = try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_idle","resets_left":1,"usable_now":false,"ends_at":"2026-08-01T00:00:00Z"}]}"#)
+    /// A counted grant that is not usable now is never sent for a new
+    /// attempt: the answer names why, and nothing reaches the provider.
+    func testNonUsableGrantIsBlockedWithoutAPost() async throws {
+        let body = try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_idle","resets_left":1,"usable_now":false,"use_requires_limit":false,"ends_at":"2026-08-01T00:00:00Z"}]}"#)
         let client = AnthropicMockHTTPClient(status: 200, body: body)
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: Data(#"{"result":"not_limited","reason":"not_limited"}"#.utf8))
@@ -231,26 +241,41 @@ final class AnthropicResetTests: XCTestCase {
 
         let status = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(status.resetCreditsAvailable, 1)
-        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        XCTAssertEqual(outcome, .nothingToReset)
-        XCTAssertEqual(try jsonBody(try XCTUnwrap(posts(client).first))["grant_id"] as? String, "grant_test_idle")
-        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL])
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(outcome, .blocked(.notUsableNow))
+        XCTAssertTrue(posts(client).isEmpty)
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile])
     }
 
+    /// No grants at all: with no reading the spend sends nothing; after a
+    /// reading it is no credit, with no usage read of its own and no POST.
     func testNoUsableGrantIsNoCreditWithoutAPost() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try AnthropicFixtures.data("anthropic-resets-no-grants"))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        client.enqueue(status: 200, body: try profileBody())
+        let provider = makeProvider(client)
+
+        let early = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(early, .needsFreshReading)
+        XCTAssertTrue(client.requests.isEmpty)
+
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(outcome, .noCredit)
-        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage])
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile])
     }
 
-    /// A grant whose id fails the rule is never selected, so no POST carries it.
+    /// A grant whose id fails the rule is never selected, so no POST carries
+    /// it: after a reading the spend is no credit.
     func testInvalidGrantIDSendsNoPost() async throws {
         let shapes = try XCTUnwrap(JSONSerialization.jsonObject(with: try AnthropicFixtures.data("anthropic-resets-malformed-blocks")) as? [String: Any])
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try AnthropicFixtures.data("anthropic-limits")) as? [String: Any])
         root["cedar_ember"] = shapes["grant_id_path"]
         let client = AnthropicMockHTTPClient(status: 200, body: try JSONSerialization.data(withJSONObject: root))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        client.enqueue(status: 200, body: try profileBody())
+        let provider = makeProvider(client)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(outcome, .noCredit)
         XCTAssertTrue(posts(client).isEmpty)
     }
@@ -276,7 +301,7 @@ final class AnthropicResetTests: XCTestCase {
     func testConsoleTokenIsNeedsLoginWithoutARequest() async {
         let client = AnthropicMockHTTPClient()
         do {
-            _ = try await makeProvider(client).useReset(account: account, credential: AccountCredential(accessToken: "t", scopes: ["user:profile"]), attemptID: attemptID)
+            _ = try await makeProvider(client).useReset(account: account, credential: AccountCredential(accessToken: "t", scopes: ["user:profile"]), attemptID: attemptID, choice: .other)
             XCTFail("expected needsLogin")
         } catch UsageError.needsLogin {
             XCTAssertTrue(client.requests.isEmpty)
@@ -298,7 +323,7 @@ final class AnthropicResetTests: XCTestCase {
 
         clock.advance(by: 100)
         do {
-            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
             XCTFail("expected rateLimited")
         } catch UsageError.rateLimited(let retryAfter) {
             XCTAssertEqual(try XCTUnwrap(retryAfter), 500, accuracy: 0.5)
@@ -317,7 +342,7 @@ final class AnthropicResetTests: XCTestCase {
 
         for _ in 0..<2 {
             do {
-                _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+                _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
                 XCTFail("expected rateLimited")
             } catch UsageError.rateLimited(let retryAfter) {
                 XCTAssertEqual(retryAfter, AnthropicProvider.profileRefusalHold)
@@ -327,25 +352,36 @@ final class AnthropicResetTests: XCTestCase {
         XCTAssertTrue(posts(client).isEmpty)
     }
 
+    /// The plan read's profile names no organization, so after a reading
+    /// there is nowhere to send the reset: not available, and no POST.
     func testProfileWithoutOrganizationIsNotAvailableWithoutAPost() async throws {
         let client = AnthropicMockHTTPClient(status: 200, body: try twoGrants())
         client.enqueue(status: 200, body: Data(#"{"account":{"email":"user@example.com"},"organization":{"organization_type":"claude_pro"}}"#.utf8))
-        let outcome = try await makeProvider(client).useReset(account: account, credential: credential, attemptID: attemptID)
+        let provider = makeProvider(client)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+
+        let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(outcome, .notAvailable)
         XCTAssertTrue(posts(client).isEmpty)
     }
 
-    /// A new sign-in forgets the organization and the grant, so the reset
-    /// goes to the new sign-in's organization.
+    /// A new sign-in forgets the organization and the grant: a spend before
+    /// the next reading sends nothing, and the one after it goes to the new
+    /// sign-in's organization, learnt by that reading's profile read.
     func testSignInForgetsTheOrganization() async throws {
         let client = AnthropicMockHTTPClient()
         let provider = try await primedProvider(client)
         await provider.accountDidSignIn(account.id)
+
+        let early = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(early, .notAvailable, "the pick predates the sign-in")
+        XCTAssertEqual(client.requests.count, 2, "nothing sent")
+
         client.enqueue(status: 200, body: try twoGrants())
         client.enqueue(status: 200, body: Data(#"{"organization":{"uuid":"\#(otherOrg)","organization_type":"claude_pro"}}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
-
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        _ = try await provider.fetchStatus(account: account, credential: credential)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
         XCTAssertEqual(posts(client).first?.url?.absoluteString, "https://api.anthropic.com/api/organizations/\(otherOrg)/reset_rate_limits")
         XCTAssertEqual(client.requests.filter { $0.url == AnthropicEndpoints.profile }.count, 2)
     }
@@ -357,9 +393,9 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client)
         for _ in 0..<3 { client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8)) }
 
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
         XCTAssertEqual(ids.count, 3)
         XCTAssertEqual(ids[0], ids[1])
@@ -368,12 +404,12 @@ final class AnthropicResetTests: XCTestCase {
 
     /// Grant A named next with one reset left, and grant B with two.
     private func aSelectedBody() throws -> Data {
-        try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":1,"usable_now":true,"ends_at":"2026-08-01T00:00:00Z"},{"id":"grant_test_b","resets_left":2,"usable_now":true,"ends_at":"2026-07-20T00:00:00Z"}],"next_grant_id":"grant_test_a"}"#)
+        try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":1,"usable_now":true,"use_requires_limit":false,"ends_at":"2026-08-01T00:00:00Z"},{"id":"grant_test_b","resets_left":2,"usable_now":true,"use_requires_limit":false,"ends_at":"2026-07-20T00:00:00Z"}],"next_grant_id":"grant_test_a"}"#)
     }
 
     /// Grant A spent, so a read selects grant B.
     private func bSelectedBody() throws -> Data {
-        try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":0,"usable_now":false,"ends_at":"2026-08-01T00:00:00Z"},{"id":"grant_test_b","resets_left":2,"usable_now":true,"ends_at":"2026-07-20T00:00:00Z"}],"next_grant_id":null}"#)
+        try usageBody(block: #"{"eligible":true,"grants":[{"id":"grant_test_a","resets_left":0,"usable_now":false,"ends_at":"2026-08-01T00:00:00Z"},{"id":"grant_test_b","resets_left":2,"usable_now":true,"use_requires_limit":false,"ends_at":"2026-07-20T00:00:00Z"}],"next_grant_id":null}"#)
     }
 
     private func grantIDs(_ client: AnthropicMockHTTPClient) throws -> [String?] {
@@ -393,12 +429,12 @@ final class AnthropicResetTests: XCTestCase {
         let provider = makeProvider(client)
         _ = try await provider.fetchStatus(account: account, credential: credential)
 
-        let first = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let first = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(first, .unexpected)
         let reread = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(reread.resetCreditsAvailable, 2)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a", "grant_test_b"])
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
@@ -430,7 +466,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = makeProvider(client)
         _ = try await provider.fetchStatus(account: account, credential: credential)
         do {
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
             XCTFail("expected a 503, got \(outcome)")
         } catch UsageError.httpStatus(let status) {
             XCTAssertEqual(status, 503)
@@ -438,11 +474,11 @@ final class AnthropicResetTests: XCTestCase {
         return provider
     }
 
-    /// The reset gets a 503 after the provider may have spent grant A, the
-    /// account signs in again to the same organization, and a fresh read
-    /// selects grant B. The resend of the same attempt still goes to A, so
-    /// one request id can never spend B as well. A new attempt selects B.
-    func testSignInToTheSameOrganizationKeepsTheAttemptsGrantPin() async throws {
+    /// The reset gets a 503 after the provider may have spent grant A, then
+    /// the account signs in again to the same organization. The sign-in
+    /// forgets the attempt and its pin: a resend of it sends nothing, and the
+    /// next click is a new attempt that selects from the fresh reading.
+    func testSignInToTheSameOrganizationForgetsTheAttemptsGrantPin() async throws {
         let client = AnthropicMockHTTPClient()
         let provider = try await attemptEndingIn503(client)
 
@@ -451,70 +487,60 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: try profileBody())
         let reread = try await provider.fetchStatus(account: account, credential: credential)
         XCTAssertEqual(reread.resetCreditsAvailable, 2)
-        client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8))
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
 
-        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        XCTAssertEqual(resent, .reset)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: UUID())
+        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(resent, .notAvailable)
+        let fresh = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
+        XCTAssertEqual(fresh, .reset)
 
-        XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a", "grant_test_b"])
+        XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b"])
         let ids = try posts(client).map { try jsonBody($0)["request_id"] as? String }
-        XCTAssertEqual(ids[1], ids[0])
-        XCTAssertNotEqual(ids[2], ids[0])
+        XCTAssertNotEqual(ids[1], ids[0])
         XCTAssertEqual(client.requests.map(\.url), [
             AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL,
-            AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL, resetURL,
+            AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL,
         ])
     }
 
     /// The same scenario with no poll between the sign-in and the resend:
-    /// the resend reads the profile to learn the organization, finds it
-    /// unchanged, and goes to A with no usage read.
-    func testResendRightAfterASignInReadsTheOrganizationAndKeepsThePin() async throws {
+    /// the resend sends nothing at all, not even a profile read.
+    func testResendRightAfterASignInSendsNothing() async throws {
         let client = AnthropicMockHTTPClient()
         let provider = try await attemptEndingIn503(client)
 
         await provider.accountDidSignIn(account.id)
-        client.enqueue(status: 200, body: try profileBody())
-        client.enqueue(status: 200, body: Data(#"{"result":"already_used"}"#.utf8))
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(resent, .notAvailable)
 
-        XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_a"])
-        XCTAssertEqual(client.requests.map(\.url), [
-            AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL,
-            AnthropicEndpoints.profile, resetURL,
-        ])
+        XCTAssertEqual(try grantIDs(client), ["grant_test_a"])
+        XCTAssertEqual(client.requests.map(\.url), [AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL])
     }
 
-    /// A sign-in to another organization drops the pin once the resend
-    /// learns the new organization: the attempt is a fresh one there, so it
-    /// selects from a new read and goes to the new organization. Its pin is
-    /// then the new organization's, and a further resend keeps it.
-    func testSignInToAnotherOrganizationDropsThePin() async throws {
+    /// A sign-in forgets the attempt, its pinned grant and the organization:
+    /// a resend of the old attempt sends nothing, so it can never reach
+    /// another organization. The next click is a new attempt that goes to the
+    /// new sign-in's organization with a grant from its own reading.
+    func testSignInToAnotherOrganizationForgetsTheAttempt() async throws {
         let client = AnthropicMockHTTPClient()
         let provider = try await attemptEndingIn503(client)
 
         await provider.accountDidSignIn(account.id)
-        client.enqueue(status: 200, body: otherOrgProfile())
+        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(resent, .notAvailable)
+        XCTAssertEqual(client.requests.count, 3, "the resend sent nothing")
+
         client.enqueue(status: 200, body: try bSelectedBody())
-        client.enqueue(status: 503)
-        client.enqueue(status: 200, body: try aSelectedBody())
+        client.enqueue(status: 200, body: otherOrgProfile())
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
-
-        do {
-            _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-            XCTFail("expected a 503")
-        } catch UsageError.httpStatus(503) {}
         _ = try await provider.fetchStatus(account: account, credential: credential)
-        let resent = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        XCTAssertEqual(resent, .reset)
+        let fresh = try await provider.useReset(account: account, credential: credential, attemptID: UUID(), choice: .other)
+        XCTAssertEqual(fresh, .reset)
 
-        XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b", "grant_test_b"])
+        XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b"])
         XCTAssertEqual(client.requests.map(\.url), [
             AnthropicEndpoints.usage, AnthropicEndpoints.profile, resetURL,
-            AnthropicEndpoints.profile, AnthropicEndpoints.usage, otherResetURL,
-            AnthropicEndpoints.usage, otherResetURL,
+            AnthropicEndpoints.usage, AnthropicEndpoints.profile, otherResetURL,
         ])
     }
 
@@ -530,24 +556,29 @@ final class AnthropicResetTests: XCTestCase {
         client.enqueue(status: 200, body: Data(#"{"result":"unavailable"}"#.utf8))
 
         _ = try await provider.fetchStatus(account: account, credential: credential)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: second)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
-        _ = try await provider.useReset(account: account, credential: credential, attemptID: second)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: second, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        _ = try await provider.useReset(account: account, credential: credential, attemptID: second, choice: .other)
 
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b", "grant_test_b", "grant_test_b"])
     }
 
     /// The pin lives in memory only: a relaunched adapter does not know it,
-    /// and nothing about it lands in the app's defaults.
+    /// and nothing about it lands in the app's defaults. With no reading yet
+    /// the relaunched adapter sends nothing; after its own reading the old
+    /// attempt id selects afresh.
     func testThePinIsNeverPersisted() async throws {
         let client = AnthropicMockHTTPClient()
         _ = try await attemptEndingIn503(client)
 
         let relaunched = makeProvider(client)
+        let early = try await relaunched.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
+        XCTAssertEqual(early, .needsFreshReading)
         client.enqueue(status: 200, body: try bSelectedBody())
         client.enqueue(status: 200, body: try profileBody())
         client.enqueue(status: 200, body: Data(#"{"result":"reset"}"#.utf8))
-        _ = try await relaunched.useReset(account: account, credential: credential, attemptID: attemptID)
+        _ = try await relaunched.fetchStatus(account: account, credential: credential)
+        _ = try await relaunched.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
         XCTAssertEqual(try grantIDs(client), ["grant_test_a", "grant_test_b"])
 
         let defaults = String(describing: UserDefaults.standard.dictionaryRepresentation())
@@ -586,7 +617,7 @@ final class AnthropicResetTests: XCTestCase {
             let client = AnthropicMockHTTPClient()
             let provider = try await primedProvider(client)
             client.enqueue(status: 200, body: Data(body.utf8))
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
             XCTAssertEqual(outcome, expected, body)
         }
     }
@@ -596,7 +627,7 @@ final class AnthropicResetTests: XCTestCase {
         let provider = try await primedProvider(client, diagnostics: diagnostics)
         client.enqueue(status: status, body: body, headers: headers)
         do {
-            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID)
+            let outcome = try await provider.useReset(account: account, credential: credential, attemptID: attemptID, choice: .other)
             XCTFail("expected an error, got \(outcome)")
             return (UsageError.invalidResponse("none"), client)
         } catch {
@@ -635,12 +666,12 @@ final class AnthropicResetTests: XCTestCase {
     }
 
     func testServerErrorIsHTTPStatusAndLeaksNoToken() async throws {
-        let body = Data(#"{"error":"boom","echo":"Authorization: Bearer sk-ant-xyz"}"#.utf8)
+        let body = Data(#"{"error":"boom","echo":"Authorization: Bearer \#(FakeToken.anthropicLeak)"}"#.utf8)
         let (error, _) = try await resetError(status: 500, body: body)
         guard case UsageError.httpStatus(let code) = error else { return XCTFail("got \(error)") }
         XCTAssertEqual(code, 500)
         for rendering in [String(describing: error), String(reflecting: error), error.localizedDescription] {
-            XCTAssertFalse(rendering.contains("sk-ant"), rendering)
+            XCTAssertFalse(rendering.contains(FakeToken.anthropicPrefix), rendering)
             XCTAssertFalse(rendering.contains(AnthropicSampleSecret.accessToken), rendering)
         }
     }

@@ -118,9 +118,20 @@ struct ResetLine: View {
 /// as tall as the title and count alone, so the button never makes a row
 /// taller, and everything stays inside the column's fixed width, so the row
 /// never gets wider.
+///
+/// A row whose provider reports kinds lists them instead of the count, one
+/// line per kind, count first, with the button on the first line. Each
+/// further kind adds one line to this row only.
 struct ResetCreditsColumn: View {
     let count: Int
     let dimmed: Bool
+    /// The kinds to list, in display order; `nil` or empty draws the single
+    /// "N available" line.
+    var kinds: [ResetKind]? = nil
+    /// What an unsettled attempt on the account leaves the row to offer.
+    var gate: ResetGate? = nil
+    /// For the times in a kind's reason.
+    var now: Date = Date()
     /// The row's name, for the button's spoken label.
     var displayName: String = ""
     /// A reset for this account is running: the button gives way to a
@@ -167,12 +178,20 @@ struct ResetCreditsColumn: View {
     /// Why a reset cannot be started now, or `nil` when it can. The row's
     /// menus use the same rule as the button.
     static func disabledReason(count: Int, dimmed: Bool) -> String? {
-        if count <= 0 { return "No resets available" }
-        if dimmed { return "Refresh this account first" }
-        return nil
+        ResetOffer.disabledReason(count: count, dimmed: dimmed)
     }
 
-    private var disabledReason: String? { Self.disabledReason(count: count, dimmed: dimmed) }
+    /// Space between two kind lines.
+    static let kindLineSpacing: CGFloat = 3
+    /// Room the first kind line keeps clear at its trailing edge for the
+    /// Use reset button, so a long label is cut before it reaches it.
+    static let useButtonReserve: CGFloat = 80
+
+    private var offer: ResetOffer {
+        ResetOffer(count: count, kinds: kinds, dimmed: dimmed, gate: gate, now: now)
+    }
+
+    private var disabledReason: String? { offer.disabledReason }
     private var fade: Double { dimmed ? Colors.dimmedOpacity : 1 }
 
     var body: some View {
@@ -184,20 +203,11 @@ struct ResetCreditsColumn: View {
                     .lineLimit(1)
                     .opacity(fade)
                     .accessibilityHidden(true)
-                (Text("\(count)")
-                    .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.primary)
-                 + Text("  available")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary))
-                    .lineLimit(1)
-                    .opacity(fade)
-                    .accessibilityLabel("Manual resets, \(count) available")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // An overlay, so the button never adds height to the line.
-                    .overlay(alignment: .trailing) {
-                        if !isResetting { useButton }
-                    }
+                if offer.hasKinds {
+                    kindLines
+                } else {
+                    countLine
+                }
             }
             statusLine
         }
@@ -205,12 +215,65 @@ struct ResetCreditsColumn: View {
         .animation(.easeOut(duration: 0.3), value: notice)
     }
 
+    private var countLine: some View {
+        (Text("\(count)")
+            .font(.system(size: 14, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.primary)
+         + Text("  available")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary))
+            .lineLimit(1)
+            .opacity(fade)
+            .accessibilityLabel("Manual resets, \(count) available")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // An overlay, so the button never adds height to the line.
+            .overlay(alignment: .trailing) {
+                if !isResetting { useButton }
+            }
+    }
+
+    private var kindLines: some View {
+        VStack(alignment: .leading, spacing: Self.kindLineSpacing) {
+            ForEach(Array(offer.kinds.enumerated()), id: \.element.key) { index, kind in
+                kindLine(kind, carriesButton: index == 0 && !isResetting)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(offer.columnAccessibilityLabel)
+    }
+
+    /// `2  Full reset`: the count, then the label, cut on one line. A kind
+    /// that cannot be started is greyed, and its reason is the tooltip.
+    private func kindLine(_ kind: ResetKind, carriesButton: Bool) -> some View {
+        let reason = offer.reason(for: kind)
+        let greyed = reason != nil
+        return (Text("\(kind.count)")
+            .font(.system(size: 14, weight: .semibold).monospacedDigit())
+            .foregroundStyle(greyed ? .tertiary : .primary)
+         + Text("  \(kind.label)")
+            .font(.system(size: 13))
+            .foregroundStyle(greyed ? .tertiary : .secondary))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .opacity(fade)
+            .padding(.trailing, carriesButton ? Self.useButtonReserve : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .help(reason ?? kind.label)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(offer.lineAccessibilityLabel(for: kind))
+            // An overlay, so the button never adds height to the line.
+            .overlay(alignment: .trailing) {
+                if carriesButton { useButton }
+            }
+    }
+
     private var useButton: some View {
         Button("Use reset", action: onUse)
             .controlSize(.small)
             .disabled(disabledReason != nil)
-            .help(disabledReason ?? "Spend one banked reset for this account")
-            .accessibilityLabel("Use reset for \(displayName), \(count) available")
+            .help(disabledReason ?? offer.enabledHelp)
+            .accessibilityLabel(offer.hasKinds ? "Use reset for \(displayName)" : "Use reset for \(displayName), \(count) available")
             .accessibilityHint(disabledReason ?? "Asks you to confirm first")
     }
 

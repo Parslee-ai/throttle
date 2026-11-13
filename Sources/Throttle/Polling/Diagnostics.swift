@@ -6,15 +6,16 @@ import os
 ///
 /// The request's `Authorization` header is dropped, never redacted in place,
 /// so a diagnostics line can not carry a token even in masked form. The
-/// response body is capped at 300 characters and passed through `Redactor`,
-/// as is the free-text message.
+/// response body and the free-text message pass through `Redactor`; the body
+/// is cut to 300 characters only when the line is written, after hidden ids
+/// are removed, so a cut can never leave part of one.
 struct DiagnosticEvent: Codable, Hashable, Sendable {
     enum Kind: String, Codable, Sendable {
         case usage, refresh, profile, login, scheduler
         case reset
     }
 
-    /// Characters of the response body kept on the line.
+    /// Characters of the response body kept on the written line.
     static let bodyPrefixLength = 300
 
     var ts: Date
@@ -51,7 +52,7 @@ struct DiagnosticEvent: Codable, Hashable, Sendable {
         self.retryAfterSeconds = retryAfterSeconds
         self.requestHeaders = Self.strippedHeaders(requestHeaders)
         self.url = url
-        self.bodyPrefix = Redactor.redact(String(bodyPrefix.prefix(Self.bodyPrefixLength)))
+        self.bodyPrefix = Redactor.redact(bodyPrefix)
         self.message = message.map(Redactor.redact)
     }
 
@@ -86,7 +87,7 @@ struct DiagnosticEvent: Codable, Hashable, Sendable {
             retryAfterSeconds: retrySeconds,
             requestHeaders: request.allHTTPHeaderFields ?? [:],
             url: request.url?.absoluteString ?? "",
-            bodyPrefix: String(decoding: response.body.prefix(Self.bodyPrefixLength * 4), as: UTF8.self),
+            bodyPrefix: String(decoding: response.body, as: UTF8.self),
             message: message
         )
     }
@@ -120,8 +121,14 @@ actor Diagnostics {
     static let maxBytes = 512 * 1024
     static let keepBytes = 256 * 1024
 
+    /// Stands in for a hidden id on a written line.
+    static let hiddenID = Redactor.idReplacement
+
     private let paths: AppPaths
     private let logger = Logger(subsystem: "ai.parslee.throttle", category: "Diagnostics")
+    /// Ids no line may carry, such as a reset's organization, grant and
+    /// request ids. Memory only, so the list itself never reaches disk.
+    private var hidden: Set<String> = []
 
     init(paths: AppPaths) {
         self.paths = paths
@@ -130,11 +137,19 @@ actor Diagnostics {
     /// Where the log lives. Exposed so the UI can reveal it in Finder.
     nonisolated var fileURL: URL { paths.diagnosticsFile }
 
+    /// Keeps `ids` off every line written from now on, whichever caller
+    /// writes it and whatever text (a provider's message, a body, a URL)
+    /// carries them. Every line passes through `record`, so this is the one
+    /// place the rule is enforced.
+    func hide(_ ids: [String]) {
+        hidden.formUnion(ids.filter { !$0.isEmpty })
+    }
+
     /// Appends one line. Never throws.
     func record(_ event: DiagnosticEvent) {
         do {
             try paths.ensureDirectoryExists()
-            var line = try Self.encoder.encode(event)
+            var line = try Self.encoder.encode(written(event))
             line.append(0x0A)
             try append(line)
             try truncateIfNeeded()
@@ -154,6 +169,22 @@ actor Diagnostics {
         } catch {
             logger.error("Diagnostics file could not be created: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    /// `event` as it goes on disk: every hidden id replaced, in any letter
+    /// case, in each field that can carry text, and only then the body cut.
+    private func written(_ event: DiagnosticEvent) -> DiagnosticEvent {
+        let scrub: (String) -> String = { text in
+            self.hidden.reduce(text) { out, id in
+                out.replacingOccurrences(of: id, with: Self.hiddenID, options: .caseInsensitive)
+            }
+        }
+        var event = event
+        event.message = event.message.map(scrub)
+        event.bodyPrefix = Redactor.capped(event.bodyPrefix, hiding: hidden, maxLength: DiagnosticEvent.bodyPrefixLength)
+        event.url = scrub(event.url)
+        event.requestHeaders = event.requestHeaders.mapValues(scrub)
+        return event
     }
 
     // MARK: File plumbing

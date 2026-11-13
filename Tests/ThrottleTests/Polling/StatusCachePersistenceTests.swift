@@ -218,4 +218,166 @@ final class StatusCachePersistenceTests: XCTestCase {
             return []
         }
     }
+
+    // MARK: Reset kinds and 0.5.1 compatibility (ISC-484 to ISC-487)
+
+    /// The inputs 0.5.1 encoded into `status-cache-0.5.1.json` and
+    /// `status-cache-0.5.1-codex.json`, generated at tag `v0.5.1`.
+    private enum V051Inputs {
+        static let claudeID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        static let codexID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        static let erroredID = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
+        static let codexOnlyID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        static let readAt = Date(timeIntervalSince1970: 1_793_000_000)
+
+        static func entries() -> [UUID: CachedStatus] {
+            let t = readAt
+            let claudeWindows = [
+                UsageWindow(key: "7d", label: "Weekly", usedPercent: 41, resetsAt: t.addingTimeInterval(200_000), durationSeconds: 604_800),
+                UsageWindow(key: "scoped:Testmodel", label: "Testmodel", usedPercent: 100, resetsAt: t.addingTimeInterval(300_000), durationSeconds: 604_800),
+            ]
+            let claude = CachedStatus(
+                status: AccountStatus(accountID: claudeID, provider: .anthropic, email: "fixture-claude", windows: claudeWindows,
+                                      fetchedAt: t, state: .ok, planLabel: "max 20x", resetCreditsAvailable: 3),
+                lastGoodWindows: claudeWindows, isStale: false, lastAttempt: t, lastError: nil, nextAttemptAt: nil
+            )
+            let codexWindows = [
+                UsageWindow(key: "7d", label: "Weekly", usedPercent: 12.5, resetsAt: t.addingTimeInterval(400_000), durationSeconds: 604_800),
+            ]
+            let codex = CachedStatus(
+                status: AccountStatus(accountID: codexID, provider: .openai, email: "fixture-codex", windows: codexWindows,
+                                      fetchedAt: t.addingTimeInterval(-60), state: .rateLimited(until: t.addingTimeInterval(900)),
+                                      planLabel: "pro", resetCreditsAvailable: 2),
+                lastGoodWindows: codexWindows, isStale: false, lastAttempt: t, lastError: "Rate limited by Codex",
+                nextAttemptAt: t.addingTimeInterval(900)
+            )
+            let erroredWindows = [
+                UsageWindow(key: "7d", label: "Weekly", usedPercent: 0, resetsAt: nil, durationSeconds: 604_800),
+            ]
+            let errored = CachedStatus(
+                status: AccountStatus(accountID: erroredID, provider: .anthropic, email: "fixture-claude-two", windows: erroredWindows,
+                                      fetchedAt: t.addingTimeInterval(-3_600), state: .error("Timed out after 15 s"),
+                                      planLabel: nil, resetCreditsAvailable: nil),
+                lastGoodWindows: erroredWindows, isStale: true, lastAttempt: t, lastError: "Timed out after 15 s",
+                nextAttemptAt: t.addingTimeInterval(120)
+            )
+            return [claudeID: claude, codexID: codex, erroredID: errored]
+        }
+
+        static func codexOnly() -> [UUID: CachedStatus] {
+            let t = readAt
+            let windows = [
+                UsageWindow(key: "7d", label: "Weekly", usedPercent: 63, resetsAt: t.addingTimeInterval(500_000), durationSeconds: 604_800),
+                UsageWindow(key: "lane:spark-7d", label: "Spark Weekly", usedPercent: 4, resetsAt: nil, durationSeconds: 604_800),
+            ]
+            let entry = CachedStatus(
+                status: AccountStatus(accountID: codexOnlyID, provider: .openai, email: "fixture-codex-two", windows: windows,
+                                      fetchedAt: t, state: .ok, planLabel: "plus", resetCreditsAvailable: 1),
+                lastGoodWindows: windows, isStale: false, lastAttempt: t, lastError: nil, nextAttemptAt: nil
+            )
+            return [codexOnlyID: entry]
+        }
+    }
+
+    private static let allReasonKinds: [ResetKind] = [
+        ResetKind(key: .full, label: "Full reset", count: 2),
+        ResetKind(key: .weekly, label: "7-day reset", count: 1, reason: .cooldown(until: Date(timeIntervalSince1970: 1_793_000_600))),
+        ResetKind(key: .session, label: "5-hour reset", count: 0),
+        ResetKind(key: .modelRefill, label: "Testmodel reset", count: 1, reason: .nothingToGiveBack),
+        ResetKind(key: .other, label: "", count: 1, reason: .notStarted(startsAt: Date(timeIntervalSince1970: 1_793_086_400))),
+    ]
+
+    /// The 0.5.1 Claude entry as the new build writes it: the same reading
+    /// with kinds.
+    private func newBuildEntries() -> [UUID: CachedStatus] {
+        var entries = V051Inputs.entries()
+        let claude = entries[V051Inputs.claudeID]!
+        entries[V051Inputs.claudeID]?.status = AccountStatus(
+            accountID: claude.status.accountID,
+            provider: claude.status.provider,
+            email: claude.status.email,
+            windows: claude.status.windows,
+            fetchedAt: claude.status.fetchedAt,
+            state: claude.status.state,
+            planLabel: claude.status.planLabel,
+            resetKinds: Self.allReasonKinds
+        )
+        return entries
+    }
+
+    func testKindsRoundTripThroughTheCacheFile() throws {
+        let entries = newBuildEntries()
+        let decoded = try StatusCachePersistence.decode(try StatusCachePersistence.encode(entries))
+        XCTAssertEqual(decoded, entries)
+        let kinds = try XCTUnwrap(decoded[V051Inputs.claudeID]?.status.resetKinds)
+        XCTAssertEqual(kinds.map(\.key), [.full, .weekly, .session, .modelRefill, .other])
+        XCTAssertEqual(kinds.map(\.label), ["Full reset", "7-day reset", "5-hour reset", "Testmodel reset", "Reset"])
+        XCTAssertEqual(kinds.map(\.count), [2, 1, 0, 1, 1])
+        XCTAssertEqual(kinds.map(\.reason), [
+            nil, .cooldown(until: Date(timeIntervalSince1970: 1_793_000_600)), .noneLeft, .nothingToGiveBack,
+            .notStarted(startsAt: Date(timeIntervalSince1970: 1_793_086_400)),
+        ])
+        XCTAssertEqual(decoded[V051Inputs.claudeID]?.status.resetCreditsAvailable, 5)
+    }
+
+    func testKindsRoundTripThroughSaveAndLoad() async throws {
+        let persistence = StatusCachePersistence(paths: paths, clock: clock, minimumWriteInterval: 0)
+        let entries = newBuildEntries()
+        await persistence.record(entries)
+        let loaded = await StatusCachePersistence(paths: paths, clock: clock).load()
+        XCTAssertEqual(loaded, entries)
+    }
+
+    func testDecodesV051CacheWithTheSameWindowsPlanAndTotalAndNoKinds() throws {
+        let decoded = try StatusCachePersistence.decode(try TestFixtures.data("status-cache-0.5.1"))
+        let expected = V051Inputs.entries()
+        XCTAssertEqual(decoded, expected)
+        XCTAssertEqual(decoded.count, 3)
+        for (id, entry) in decoded {
+            XCTAssertEqual(entry.status.windows, expected[id]?.status.windows)
+            XCTAssertEqual(entry.status.planLabel, expected[id]?.status.planLabel)
+            XCTAssertEqual(entry.status.resetCreditsAvailable, expected[id]?.status.resetCreditsAvailable)
+            XCTAssertNil(entry.status.resetKinds)
+        }
+        XCTAssertEqual(decoded[V051Inputs.claudeID]?.status.resetCreditsAvailable, 3)
+    }
+
+    /// A downgrade never blanks the rows: what the new build writes, kinds
+    /// and all, loads in 0.5.1's own types with every entry intact.
+    func testDowngradeDecodesInV051Types() throws {
+        XCTAssertEqual(StatusCachePersistence.formatVersion, 1)
+        XCTAssertEqual(StatusCachePersistence.formatVersion, V051.formatVersion)
+        let written = newBuildEntries()
+        let data = try StatusCachePersistence.encode(written)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("resetKinds"), "the file under test carries kinds")
+
+        let old = try V051.decode(data)
+        XCTAssertEqual(Set(old.keys), Set(written.keys), "every entry survives")
+        for (id, entry) in written {
+            let downgraded = try XCTUnwrap(old[id])
+            XCTAssertEqual(downgraded.status.accountID, entry.status.accountID)
+            XCTAssertEqual(downgraded.status.provider.rawValue, entry.status.provider.rawValue)
+            XCTAssertEqual(downgraded.status.email, entry.status.email)
+            XCTAssertEqual(downgraded.status.fetchedAt, entry.status.fetchedAt)
+            XCTAssertEqual(downgraded.status.planLabel, entry.status.planLabel)
+            XCTAssertEqual(downgraded.status.resetCreditsAvailable, entry.status.resetCreditsAvailable, "the total survives")
+            XCTAssertEqual(downgraded.status.windows.map(\.key), entry.status.windows.map(\.key))
+            XCTAssertEqual(downgraded.status.windows.map(\.usedPercent), entry.status.windows.map(\.usedPercent))
+            XCTAssertEqual(downgraded.status.windows.map(\.resetsAt), entry.status.windows.map(\.resetsAt))
+            XCTAssertEqual(downgraded.lastGoodWindows?.count, entry.lastGoodWindows?.count)
+            XCTAssertEqual(downgraded.isStale, entry.isStale)
+            XCTAssertEqual(downgraded.lastAttempt, entry.lastAttempt)
+            XCTAssertEqual(downgraded.lastError, entry.lastError)
+            XCTAssertEqual(downgraded.nextAttemptAt, entry.nextAttemptAt)
+            XCTAssertEqual(String(describing: downgraded.status.state), String(describing: entry.status.state), "the state survives")
+        }
+        XCTAssertEqual(old[V051Inputs.claudeID]?.status.resetCreditsAvailable, 5)
+    }
+
+    func testCodexBytesUnchangedFromV051() throws {
+        let expected = try TestFixtures.data("status-cache-0.5.1-codex")
+        XCTAssertEqual(try StatusCachePersistence.encode(V051Inputs.codexOnly()), expected)
+        XCTAssertEqual(try StatusCachePersistence.encode(V051Inputs.entries()), try TestFixtures.data("status-cache-0.5.1"),
+                       "a status with no kinds encodes as 0.5.1 did")
+    }
 }

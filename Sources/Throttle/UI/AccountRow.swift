@@ -33,6 +33,8 @@ struct AccountRow: View {
     var isResetting = false
     /// The last reset's message for this row, if one is showing.
     var resetNotice: ResetNotice?
+    /// What an unsettled reset attempt on this account leaves it to offer.
+    var resetGate: ResetGate?
 
     @State private var isRenaming = false
     @State private var draftName = ""
@@ -253,10 +255,23 @@ struct AccountRow: View {
 
     private var columns: [Column] {
         var result = primaryWindows.map(Column.window)
-        if let credits = cached?.status.resetCreditsAvailable {
+        if let credits = resetCount {
             result.append(.resetCredits(credits))
         }
         return result
+    }
+
+    private var resetCount: Int? {
+        Self.resetCount(credits: cached?.status.resetCreditsAvailable, gate: resetGate)
+    }
+
+    /// The count the resets column shows, `nil` for no column. A pending
+    /// retry keeps the column even when the latest reading reports no
+    /// resets at all, because the reset it retries may already be spent.
+    static func resetCount(credits: Int?, gate: ResetGate?) -> Int? {
+        if let credits { return credits }
+        if case .retryOnly = gate { return 0 }
+        return nil
     }
 
     @ViewBuilder
@@ -339,6 +354,9 @@ struct AccountRow: View {
             ResetCreditsColumn(
                 count: count,
                 dimmed: dimmed,
+                kinds: cached?.status.resetKinds,
+                gate: resetGate,
+                now: now,
                 displayName: account.displayName,
                 isResetting: isResetting,
                 notice: noticeBelowColumns == nil ? resetNotice : nil,
@@ -373,6 +391,11 @@ struct AccountRow: View {
 
     // MARK: Actions
 
+    /// The same rule the column's button follows.
+    private func resetOffer(count: Int) -> ResetOffer {
+        ResetOffer(count: count, kinds: cached?.status.resetKinds, dimmed: dimmed, gate: resetGate, now: now)
+    }
+
     /// The same actions as the context menu, behind a visible button, because
     /// right-click is not discoverable in a menu bar window.
     private var actionsMenu: some View {
@@ -396,9 +419,9 @@ struct AccountRow: View {
         if case .rateLimited = cached?.status.state {
             Button("Retry status check now", action: actions.retryStatusCheck)
         }
-        if let count = cached?.status.resetCreditsAvailable {
+        if let count = resetCount {
             Button("Use reset…", action: actions.useReset)
-                .disabled(isResetting || ResetCreditsColumn.disabledReason(count: count, dimmed: dimmed) != nil)
+                .disabled(isResetting || resetOffer(count: count).disabledReason != nil)
         }
         Divider()
         Button("Rename…") { beginRename() }

@@ -5,7 +5,9 @@ import Foundation
 /// exercise the real shape, but no source file holds a token-shaped literal
 /// that a secret scanner on this public repository would flag.
 enum FakeToken {
-    private static let anthropicPrefix = "sk-" + "ant-"
+    /// Every Anthropic token starts with this, so a leak check on it catches
+    /// any token, not one fake value.
+    static let anthropicPrefix = "sk-" + "ant-"
 
     static let anthropicAccess = anthropicPrefix + "oat01-access"
     static let anthropicRefresh = anthropicPrefix + "ort01-refresh"
@@ -14,4 +16,6 @@ enum FakeToken {
     static let anthropicSetupToken = anthropicPrefix + "oat01-abcdef"
     static let anthropicAPIKey = anthropicPrefix + "api03-abcdef"
     static let anthropicBareSecret = anthropicPrefix + "secret-value-1234567890"
+    static let anthropicImportAccess = anthropicPrefix + "oat01-x"
+    static let anthropicImportRefresh = anthropicPrefix + "ort01-y"
 }

@@ -2,7 +2,7 @@ import XCTest
 @testable import Throttle
 
 /// The banked-reset block of the Claude usage payload: the count it yields,
-/// the grant a reset would spend, and that nothing in it can break the
+/// the grant the provider recommends, and that nothing in it can break the
 /// window reading.
 final class AnthropicResetParserTests: XCTestCase {
     private func fixture(_ name: String) throws -> Data {
