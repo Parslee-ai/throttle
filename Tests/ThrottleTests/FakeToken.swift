@@ -14,4 +14,6 @@ enum FakeToken {
     static let anthropicSetupToken = anthropicPrefix + "oat01-abcdef"
     static let anthropicAPIKey = anthropicPrefix + "api03-abcdef"
     static let anthropicBareSecret = anthropicPrefix + "secret-value-1234567890"
+    static let anthropicImportAccess = anthropicPrefix + "oat01-x"
+    static let anthropicImportRefresh = anthropicPrefix + "ort01-y"
 }

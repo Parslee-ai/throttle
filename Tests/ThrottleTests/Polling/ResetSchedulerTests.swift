@@ -513,6 +513,227 @@ final class ResetSchedulerTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Reset kinds over the Claude adapter
+
+    private func kindsFixture() -> ClaudeKindsFixture {
+        let kinds = ClaudeKindsFixture()
+        addTeardownBlock { await kinds.cleanUp() }
+        return kinds
+    }
+
+    /// One Claude account read once from the kinds fixture into a started
+    /// model, with polling stopped afterwards.
+    @MainActor
+    private func kindsModel(accounts: Int = 1) async throws -> (ClaudeKindsFixture, ModelHarness, [Account]) {
+        let kinds = ClaudeKindsFixture()
+        let h = ModelHarness(fixture: kinds.fixture, scheduler: kinds.scheduler)
+        addTeardownBlock { await h.cleanUp() }
+        var added: [Account] = []
+        for number in 0..<accounts {
+            added.append(try await kinds.fixture.addAccount(.anthropic, email: "fixture-kinds-\(number)"))
+            // Reads within one provider run one after another, so each
+            // account takes its reading and then its profile.
+            try kinds.enqueueReading()
+            kinds.enqueueProfile()
+        }
+        await h.start()
+        await h.stopPolling()
+        return (kinds, h, added)
+    }
+
+    /// The kinds fixture with the model refill's count set to `left`.
+    private static func kindsBody(refillLeft left: Int) throws -> Data {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try ClaudeKindsFixture.kindsBody()) as? [String: Any])
+        var block = try XCTUnwrap(root[AnthropicResetParser.blockKey] as? [String: Any])
+        var grants = try XCTUnwrap(block["grants"] as? [[String: Any]])
+        let refill = try XCTUnwrap(grants.firstIndex { $0["id"] as? String == ClaudeKindsFixture.refillGrant })
+        grants[refill]["resets_left"] = left
+        grants[refill]["resets_total"] = left
+        block["grants"] = grants
+        root[AnthropicResetParser.blockKey] = block
+        return try JSONSerialization.data(withJSONObject: root)
+    }
+
+    /// Cycles from the timer, a Refresh and a wake, then rotation ticks, over
+    /// a Claude account whose reading lists kinds: reads only, no reset POST.
+    func testPollCycleWithKindsSendsNoReset() async throws {
+        let k = kindsFixture()
+        let account = try await k.fixture.addAccount(.anthropic, email: "fixture-kinds")
+        try k.enqueueReading()
+        k.enqueueProfile()
+        for _ in 0..<4 { try k.enqueueReading() }
+
+        await k.scheduler.start()
+        await k.fixture.waitForCycles(1, on: k.scheduler)
+        let entry = try await k.fixture.requireEntry(account)
+        XCTAssertEqual(entry.status.resetKinds?.count, 2, "the reading lists a full reset and a model refill")
+        for cycle in 2...3 {
+            await k.clock.advance(by: 300)
+            await k.fixture.waitForCycles(cycle, on: k.scheduler)
+        }
+        await k.scheduler.refreshNow()
+        await k.fixture.waitForCycles(4, on: k.scheduler)
+        await k.scheduler.handleWillSleep()
+        await k.scheduler.handleDidWake()
+        await k.fixture.waitForCycles(5, on: k.scheduler)
+        await k.scheduler.stop()
+
+        let requestsBefore = k.http.requests.count
+        let accounts = AccountOrder.grouped(await k.fixture.store.accounts())
+        let snapshot = await k.fixture.cache.snapshot()
+        let now = k.clock.now()
+        await MainActor.run {
+            let rotation = RotationController(accounts: accounts, statuses: snapshot)
+            for _ in 0..<100 {
+                rotation.tick()
+                _ = rotation.current.map {
+                    Formatting.barLabel(account: $0, index: rotation.currentNumber ?? 0, cached: rotation.statuses[$0.id], now: now)
+                }
+            }
+        }
+        await k.clock.settle()
+
+        XCTAssertEqual(k.usageReads, 5, "one read per cycle")
+        XCTAssertEqual(k.http.requests.count, requestsBefore, "rotation reads the cache only")
+        XCTAssertEqual(k.postRequests.count, 0, "no cycle, Refresh, wake or tick spends any kind")
+    }
+
+    /// The counts shown after a kind is spent are the follow-up read's,
+    /// whether it reports them unchanged or changed: nothing is subtracted
+    /// locally from a kind or from the total.
+    func testCountsFromFollowUpReadAfterAKindIsSpent() async throws {
+        let k = kindsFixture()
+        let account = try await k.addAccountAndReadOnce()
+        let before = try await k.fixture.requireEntry(account)
+        let kindsBefore = try XCTUnwrap(before.status.resetKinds)
+        let refillBefore = try XCTUnwrap(kindsBefore.first { $0.key == .modelRefill }?.count)
+        let totalBefore = before.status.resetCreditsAvailable
+
+        k.enqueueResetAnswer()
+        try k.enqueueReading()
+        let unchanged = await k.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+        XCTAssertEqual(unchanged, .outcome(.reset))
+        let afterUnchanged = try await k.fixture.requireEntry(account)
+        XCTAssertEqual(afterUnchanged.status.resetKinds, kindsBefore, "the read reported the same counts, so they stand")
+        XCTAssertEqual(afterUnchanged.status.resetCreditsAvailable, totalBefore, "and so does the total")
+
+        k.enqueueResetAnswer()
+        k.http.enqueue(status: 200, body: try Self.kindsBody(refillLeft: refillBefore + 3))
+        let changed = await k.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+        XCTAssertEqual(changed, .outcome(.reset))
+        let afterChanged = try await k.fixture.requireEntry(account)
+        XCTAssertEqual(afterChanged.status.resetKinds?.first { $0.key == .modelRefill }?.count, refillBefore + 3)
+        XCTAssertEqual(afterChanged.status.resetKinds?.first { $0.key == .full }?.count, kindsBefore.first { $0.key == .full }?.count)
+        XCTAssertEqual(afterChanged.status.resetCreditsAvailable, totalBefore.map { $0 + 3 }, "the total is the read's")
+        XCTAssertEqual(try k.grantIDs(), [ClaudeKindsFixture.refillGrant, ClaudeKindsFixture.refillGrant])
+        XCTAssertEqual(k.usageReads, 3, "the first reading and one read after each spend")
+    }
+
+    /// Removing the row while its kind spend is out: the answer (one that
+    /// would otherwise leave a retry open) lands nowhere. No attempt, kind,
+    /// gate, cache entry, message or read is left behind.
+    @MainActor
+    func testRemoveOrRenameDuringKindSpendForgetsARemovedRow() async throws {
+        let (k, h, added) = try await kindsModel()
+        let a = added[0]
+        k.http.enqueue(status: 503)
+        k.posts.hold()
+
+        h.model.useReset(a, choice: .modelRefill)
+        let running = try XCTUnwrap(h.model.resetTasks[a.id])
+        await waitUntil("the spend was sent") { k.postRequests.count == 1 }
+        h.model.remove(a)
+        await h.waitForModel("the row is gone") { $0.accounts.isEmpty }
+        k.posts.release()
+        await running.value
+
+        XCTAssertNil(h.model.resetNotices[a.id], "no message for a row that is gone")
+        XCTAssertNil(h.model.resetGates[a.id], "no retry offered")
+        XCTAssertFalse(h.model.resetsInFlight.contains(a.id))
+        let state = await k.scheduler.resetAttemptState(for: a.id)
+        XCTAssertNil(state, "the scheduler keeps no attempt or kind for it")
+        let entry = await k.fixture.entry(a)
+        XCTAssertNil(entry, "no cache entry comes back")
+        XCTAssertNil(h.model.statuses[a.id])
+        XCTAssertEqual(k.usageReads, 1, "no read for an account that is gone")
+        XCTAssertEqual(try k.grantIDs(), [ClaudeKindsFixture.refillGrant])
+    }
+
+    /// Renaming and moving the row while its kind spend is out lands the
+    /// result, the message and the fresh reading on the same account.
+    @MainActor
+    func testRemoveOrRenameDuringKindSpendLandsOnTheSameAccount() async throws {
+        let (k, h, added) = try await kindsModel(accounts: 2)
+        let (a, b) = (added[0], added[1])
+        let otherBefore = try await k.fixture.requireEntry(b)
+        k.enqueueResetAnswer()
+        k.http.enqueue(status: 200, body: try Self.kindsBody(refillLeft: 9))
+        k.posts.hold()
+
+        h.model.useReset(a, choice: .modelRefill)
+        let running = try XCTUnwrap(h.model.resetTasks[a.id])
+        await waitUntil("the spend was sent") { k.postRequests.count == 1 }
+        h.model.rename(a, to: "Work")
+        h.model.moveDown(a)
+        await h.waitForModel("rename and move landed") { model in
+            model.accounts.map(\.id) == [b.id, a.id] && model.accounts.last?.nickname == "Work"
+        }
+        k.posts.release()
+        await running.value
+
+        XCTAssertEqual(h.model.resetNotices[a.id]?.kind, .success)
+        XCTAssertNil(h.model.resetNotices[b.id], "the other row gets nothing")
+        let entry = try await k.fixture.requireEntry(a)
+        XCTAssertEqual(entry.status.accountID, a.id)
+        XCTAssertEqual(entry.status.resetKinds?.first { $0.key == .modelRefill }?.count, 9, "the fresh reading is on the same id")
+        let otherAfter = try await k.fixture.requireEntry(b)
+        XCTAssertEqual(otherAfter, otherBefore)
+        XCTAssertEqual(k.usageReads, 3, "two first readings and one read after the spend")
+    }
+
+    /// A kind spend that outlives its send budget is reported as
+    /// couldn't-reach and stays open for a retry, which carries the same
+    /// request id to the same grant.
+    @MainActor
+    func testTimedOutKindSpendKeepsItsAttemptAndChoiceForTheRetry() async throws {
+        let (k, h, added) = try await kindsModel()
+        let a = added[0]
+        let label = h.model.statuses[a.id]?.status.resetKinds?.first { $0.key == .modelRefill }?.label
+        let budgets = k.clock.parkedCount(interval: PollScheduler.resetTimeout)
+        k.enqueueResetAnswer()
+        k.posts.hold()
+
+        h.model.useReset(a, choice: .modelRefill)
+        let first = try XCTUnwrap(h.model.resetTasks[a.id])
+        await waitUntil("the spend was sent") { k.postRequests.count == 1 }
+        _ = await k.clock.parkedSleep(interval: PollScheduler.resetTimeout, number: budgets + 1)
+        await k.clock.advance(by: PollScheduler.resetTimeout)
+        await first.value
+        k.posts.release()
+
+        let expected = ResetMessages.notice(for: .unreachable, providerName: Provider.anthropic.displayName, now: Date(), kindLabel: label)
+        XCTAssertEqual(h.model.resetNotices[a.id]?.text, expected?.text, "couldn't reach")
+        XCTAssertEqual(h.model.resetGates[a.id], .retryOnly(kind: .modelRefill, label: label), "the retry is offered for the same kind")
+        let state = await k.scheduler.resetAttemptState(for: a.id)
+        guard case .retryable(_, let choice, _) = state else {
+            return XCTFail("the attempt is not open for a retry: \(String(describing: state))")
+        }
+        XCTAssertEqual(choice, .modelRefill)
+        XCTAssertEqual(k.usageReads, 1, "an unanswered send reads nothing")
+
+        k.enqueueResetAnswer()
+        try k.enqueueReading()
+        h.model.useReset(a, choice: .modelRefill, retrying: true)
+        try await XCTUnwrap(h.model.resetTasks[a.id]).value
+
+        XCTAssertEqual(h.model.resetNotices[a.id]?.kind, .success)
+        XCTAssertEqual(try k.grantIDs(), [ClaudeKindsFixture.refillGrant, ClaudeKindsFixture.refillGrant])
+        let requestIDs = try k.requestIDs()
+        XCTAssertEqual(requestIDs.count, 2)
+        XCTAssertNotNil(requestIDs.first ?? nil)
+        XCTAssertEqual(requestIDs.first, requestIDs.last, "the retry is the same attempt")
+    }
 }
 
 /// A provider that implements no reset, so it gets the protocol's default.

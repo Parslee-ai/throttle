@@ -245,8 +245,8 @@ enum AnthropicResetParser {
         }
     }
 
-    /// The grant a reset would spend, chosen so the button never disagrees
-    /// with the count, which sums every valid grant:
+    /// The grant the provider recommends across every kind. A spend never
+    /// uses it: it resolves the owner's kind with `resolve(_:at:)`.
     ///
     /// 1. `next_grant_id`, when it passes the id rule and names a valid grant.
     /// 2. Else the usable grant (`usable_now`, resets left) that ends soonest.

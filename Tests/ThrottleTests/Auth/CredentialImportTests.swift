@@ -18,12 +18,12 @@ final class CredentialImportTests: XCTestCase {
 
     func testParsesClaudeCodeBlob() throws {
         let blob = """
-        {"claudeAiOauth":{"accessToken":"sk-ant-oat01-x","refreshToken":"sk-ant-ort01-y",\
+        {"claudeAiOauth":{"accessToken":"\(FakeToken.anthropicImportAccess)","refreshToken":"\(FakeToken.anthropicImportRefresh)",\
         "expiresAt":1800000000000,"scopes":["user:inference","user:profile"],"subscriptionType":"max"}}
         """
         let parsed = try XCTUnwrap(CredentialImport.parseClaudeCodeBlob(Data(blob.utf8)))
-        XCTAssertEqual(parsed.credential.accessToken, "sk-ant-oat01-x")
-        XCTAssertEqual(parsed.credential.refreshToken, "sk-ant-ort01-y")
+        XCTAssertEqual(parsed.credential.accessToken, FakeToken.anthropicImportAccess)
+        XCTAssertEqual(parsed.credential.refreshToken, FakeToken.anthropicImportRefresh)
         XCTAssertEqual(parsed.credential.expiresAt, Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertEqual(parsed.credential.scopes, ["user:inference", "user:profile"])
         XCTAssertNil(parsed.credential.accountID)
