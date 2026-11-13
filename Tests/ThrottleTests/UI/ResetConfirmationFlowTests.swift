@@ -145,15 +145,27 @@ struct HostedResetFlow {
     }
 
     /// Clicks at `point`, in window coordinates.
+    ///
+    /// Where a button is an AppKit button (macOS 15 draws "Use reset" and
+    /// Cancel that way), the press starts the button's own tracking loop,
+    /// which waits for the release in the app's event queue, not in
+    /// `sendEvent`. The release is queued before the press so that loop
+    /// ends as it does for a real click; when nothing tracked the press, the
+    /// release is still queued afterwards and is sent here.
     static func click(_ point: NSPoint, in window: NSWindow) throws {
         HangDiag.step("click \(point)")
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(
+        let events = try [NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+            try XCTUnwrap(NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
             ))
-            window.sendEvent(event)
-            HangDiag.step("sent \(type.rawValue)")
+        }
+        NSApp.postEvent(events[1], atStart: false)
+        window.sendEvent(events[0])
+        HangDiag.step("sent down")
+        if let release = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+            window.sendEvent(release)
+            HangDiag.step("sent queued up")
         }
         settle()
     }
