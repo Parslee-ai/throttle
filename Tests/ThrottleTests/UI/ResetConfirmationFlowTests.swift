@@ -574,7 +574,8 @@ final class ResetConfirmationFlowTests: XCTestCase {
         XCTAssertNil(flow.model.resetTasks[flow.account.id], "nothing started")
         XCTAssertEqual(flow.kinds.http.requests.count, sent, "nothing sent")
         XCTAssertTrue(flow.kinds.postRequests.isEmpty)
-        XCTAssertEqual(flow.model.resetNotices[flow.account.id]?.text, "No resets available")
+        XCTAssertEqual(flow.model.resetNotices[flow.account.id]?.text, "No Testmodel reset left",
+                       "the full reset can still be spent, so the row names the kind that cannot")
     }
 
     /// A card that opened on one kind keeps that kind when a reading swaps

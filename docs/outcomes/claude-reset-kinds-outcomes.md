@@ -41,7 +41,7 @@ Channel: the real running app, or snapshot PNGs opened and read.
 - When the chosen kind is a model refill, the confirmation says what it does, using the row's own window names: "Refills 7-day <model name> and returns its share to the 7-day limit. Other weekly usage stays as it is."
 - The "Left right now" list of each window's "% left" stays, so spending while a window has room is still a visible choice.
 - Cancel is still the default and has focus when the card opens. Return or Escape alone spends nothing, before or after a kind is picked.
-- If the chosen kind drops to 0, disappears, or becomes blocked while the card is open, confirming sends nothing and the row shows that kind's reason ("No resets available" at 0). The app never spends a different kind in its place. This extends the existing "count changes to 0 while the confirmation is open" outcome.
+- If the chosen kind drops to 0, disappears, or becomes blocked while the card is open, confirming sends nothing and the row shows that kind's reason. At 0 it reads "No <kind> left" while another kind can still be spent, and "No resets available" when none can. The app never spends a different kind in its place. This extends the existing "count changes to 0 while the confirmation is open" outcome.
 
 ### Running, success and refusals
 

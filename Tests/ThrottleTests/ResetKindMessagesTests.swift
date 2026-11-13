@@ -28,6 +28,27 @@ final class ResetKindMessagesTests: XCTestCase {
         XCTAssertEqual(text(.outcome(.blocked(.nothingToGiveBack)), kindLabel: "Testmodel reset"), "No Testmodel usage to give back")
     }
 
+    /// A kind with none left is named when another kind can still be spent,
+    /// so the row never reads "No resets available" beside one that works.
+    /// With nothing else to spend, or one unnamed kind, the words stay.
+    func testNoneLeftNamesTheKindBesideASpendableOne() {
+        let spendable = [ResetKind(key: .full, label: "Full reset", count: 1),
+                         ResetKind(key: .modelRefill, label: "Testmodel reset", count: 0, reason: .noneLeft)]
+        let other = ResetMessages.otherKindSpendable(spendable, besides: .modelRefill)
+        XCTAssertTrue(other)
+        XCTAssertEqual(ResetMessages.notice(for: .outcome(.blocked(.noneLeft)), providerName: "Claude", now: now,
+                                            kindLabel: "Testmodel reset", otherKindSpendable: other)?.text,
+                       "No Testmodel reset left")
+        XCTAssertFalse(ResetMessages.otherKindSpendable(spendable, besides: .full), "the refill has none left")
+        XCTAssertFalse(ResetMessages.otherKindSpendable(nil, besides: .full))
+        XCTAssertEqual(ResetMessages.notice(for: .outcome(.blocked(.noneLeft)), providerName: "Claude", now: now,
+                                            kindLabel: "Full reset", otherKindSpendable: false)?.text,
+                       "No resets available")
+        XCTAssertEqual(ResetMessages.notice(for: .outcome(.blocked(.noneLeft)), providerName: "Claude", now: now,
+                                            kindLabel: nil, otherKindSpendable: true)?.text,
+                       "No resets available", "one unnamed kind")
+    }
+
     func testBlockedWordingCarriesNoProviderText() {
         for reason: ResetKind.Reason in [.paused, .notUsableNow, .usableOnlyAtLimit, .noneLeft, .nothingToGiveBack] {
             let words = text(.outcome(.blocked(reason)), kindLabel: "Testmodel reset") ?? ""

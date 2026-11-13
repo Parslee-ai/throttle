@@ -188,9 +188,12 @@ struct ResetConfirmation: View {
 
     /// The row's message for a confirmed choice that was held back for a
     /// reason, worded as the same refusal from the provider would be.
-    static func heldNotice(for outcome: Outcome, providerName: String, now: Date) -> ResetNotice? {
+    /// `otherKindSpendable` says another kind on the row can still be spent.
+    static func heldNotice(for outcome: Outcome, providerName: String, now: Date,
+                           otherKindSpendable: Bool = false) -> ResetNotice? {
         guard case .hold(let reason?, let label) = outcome else { return nil }
-        return ResetMessages.notice(for: .outcome(.blocked(reason)), providerName: providerName, now: now, kindLabel: label)
+        return ResetMessages.notice(for: .outcome(.blocked(reason)), providerName: providerName, now: now,
+                                    kindLabel: label, otherKindSpendable: otherKindSpendable)
     }
 
     // MARK: Drawing

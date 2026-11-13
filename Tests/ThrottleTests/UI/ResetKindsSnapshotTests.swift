@@ -308,8 +308,11 @@ extension PopupSnapshotTests {
         let choice = ResetConfirmation.Choice(kind: .full, label: "Full reset", retrying: false)
         let outcome = ResetConfirmation.outcome(of: choice, status: after.1.status, gate: nil)
         XCTAssertEqual(outcome, .hold(.noneLeft, label: "Full reset"))
-        let notice = try XCTUnwrap(ResetConfirmation.heldNotice(for: outcome, providerName: "Claude", now: Self.kindsNow))
-        XCTAssertEqual(notice.text, "No resets available")
+        let notice = try XCTUnwrap(ResetConfirmation.heldNotice(
+            for: outcome, providerName: "Claude", now: Self.kindsNow,
+            otherKindSpendable: ResetMessages.otherKindSpendable(after.1.status.resetKinds, besides: .full)
+        ))
+        XCTAssertEqual(notice.text, "No Full reset left")
         let row = (before.0, after.1)
         try renderBoth(kindsPanel([row], notices: [row.0.id: notice]), named: "kinds-confirm-kind-gone")
     }

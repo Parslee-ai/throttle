@@ -367,7 +367,9 @@ final class AppModel {
             guard let notice = ResetConfirmation.heldNotice(
                 for: outcome,
                 providerName: account.provider.displayName,
-                now: Date()
+                now: Date(),
+                otherKindSpendable: ResetMessages.otherKindSpendable(statuses[account.id]?.status.resetKinds,
+                                                                     besides: choice.kind)
             ) else { return }
             showResetNotice(notice, for: account.id, kindLabel: label)
         }
@@ -435,7 +437,9 @@ final class AppModel {
             if windowed {
                 adoptAttemptState(state, for: accountID, label: kindLabel)
             }
-            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(), kindLabel: kindLabel) {
+            let otherSpendable = ResetMessages.otherKindSpendable(statuses[accountID]?.status.resetKinds, besides: choice)
+            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(),
+                                                 kindLabel: kindLabel, otherKindSpendable: otherSpendable) {
                 showResetNotice(notice, for: accountID, kindLabel: kindLabel)
             }
         }

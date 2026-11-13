@@ -26,8 +26,10 @@ enum ResetMessages {
     /// The notice for a finished attempt, or `nil` when the row's own state
     /// already says everything (a needed sign-in) or nothing happened (a
     /// second click during a run). `kindLabel` is the label of the kind the
-    /// owner picked, when there was one.
-    static func notice(for result: ResetResult, providerName: String, now: Date, kindLabel: String? = nil) -> ResetNotice? {
+    /// owner picked, when there was one; `otherKindSpendable` says another
+    /// kind on the row can still be spent (`otherKindSpendable(_:besides:)`).
+    static func notice(for result: ResetResult, providerName: String, now: Date, kindLabel: String? = nil,
+                       otherKindSpendable: Bool = false) -> ResetNotice? {
         switch result {
         case .outcome(.reset):
             return ResetNotice(successText(kindLabel: kindLabel), kind: .success)
@@ -41,7 +43,7 @@ enum ResetMessages {
         case .outcome(.notAvailable), .unsupported:
             return failure(notAvailable)
         case .outcome(.blocked(let reason)):
-            return failure(text(for: reason, kindLabel: kindLabel, now: now))
+            return failure(text(for: reason, kindLabel: kindLabel, now: now, otherKindSpendable: otherKindSpendable))
         case .outcome(.needsFreshReading):
             return failure(needsFreshReading)
         case .outcome(.unexpected), .unexpected:
@@ -93,14 +95,16 @@ enum ResetMessages {
 
     /// The plain reason a kind cannot be spent right now. A model refill's
     /// reason names the model, which is its kind label without the trailing
-    /// "reset".
-    static func text(for reason: ResetKind.Reason, kindLabel: String?, now: Date) -> String {
+    /// "reset". With none left, the kind is named when another kind can
+    /// still be spent, so the row never says no resets beside one that works.
+    static func text(for reason: ResetKind.Reason, kindLabel: String?, now: Date, otherKindSpendable: Bool = false) -> String {
         switch reason {
         case .cooldown(let until):
             guard let until, until > now else { return "On cooldown" }
             return "On cooldown until \(time(until, now: now))"
         case .noneLeft:
-            return noResets
+            guard otherKindSpendable, let kindLabel else { return noResets }
+            return "No \(kindLabel) left"
         case .notStarted(let startsAt):
             return "Starts \(time(startsAt, now: now))"
         case .paused:
@@ -113,6 +117,11 @@ enum ResetMessages {
             let model = modelName(fromKindLabel: kindLabel)
             return model.isEmpty ? "No usage to give back" : "No \(model) usage to give back"
         }
+    }
+
+    /// Whether the row lists a kind other than `key` that can be spent now.
+    static func otherKindSpendable(_ kinds: [ResetKind]?, besides key: ResetKind.Key?) -> Bool {
+        (kinds ?? []).contains { $0.key != key && $0.isSpendable }
     }
 
     /// A model refill's model name: its kind label without the trailing
