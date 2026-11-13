@@ -64,7 +64,6 @@ struct HostedResetFlow {
     /// once, so a reset started by a click can end inside the click's own
     /// run-loop turn; what was sent is asserted from the recorded requests.
     func finishReset() throws {
-        HangDiag.step("finishReset")
         if let task = model.resetTasks[account.id] {
             try Self.wait("the reset") { await task.value }
         }
@@ -89,8 +88,6 @@ struct HostedResetFlow {
         line: UInt = #line,
         _ body: @escaping @MainActor () async throws -> T
     ) throws -> T {
-        HangDiag.step("wait begin: \(description)")
-        defer { HangDiag.step("wait end: \(description)") }
         let box = ResultBox<T>()
         let task = Task { @MainActor in
             do { box.result = .success(try await body()) } catch { box.result = .failure(error) }
@@ -117,8 +114,6 @@ struct HostedResetFlow {
     /// Shows `view` off screen in a window that takes clicks and keys as a
     /// key window does, whether or not the session can make it key.
     static func host<V: View>(_ view: V) -> NSWindow {
-        HangDiag.step("host begin")
-        defer { HangDiag.step("host end") }
         let window = HostWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 420, height: 420),
                                 styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -139,8 +134,6 @@ struct HostedResetFlow {
 
     /// Lets SwiftUI apply a state change and redraw.
     static func settle() {
-        HangDiag.step("settle begin")
-        defer { HangDiag.step("settle end") }
         RunLoop.main.run(until: Date().addingTimeInterval(0.15))
     }
 
@@ -153,7 +146,6 @@ struct HostedResetFlow {
     /// ends as it does for a real click; when nothing tracked the press, the
     /// release is still queued afterwards and is sent here.
     static func click(_ point: NSPoint, in window: NSWindow) throws {
-        HangDiag.step("click \(point)")
         let events = try [NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
             try XCTUnwrap(NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -162,10 +154,8 @@ struct HostedResetFlow {
         }
         NSApp.postEvent(events[1], atStart: false)
         window.sendEvent(events[0])
-        HangDiag.step("sent down")
         if let release = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
             window.sendEvent(release)
-            HangDiag.step("sent queued up")
         }
         settle()
     }
@@ -187,9 +177,7 @@ struct HostedResetFlow {
         private static let buttonRowMid: CGFloat = 32
 
         private static func fitting<V: View>(_ view: V) -> CGSize {
-            HangDiag.step("fitting begin")
-            defer { HangDiag.step("fitting end") }
-            return NSHostingView(rootView: view).fittingSize
+            NSHostingView(rootView: view).fittingSize
         }
 
         private var cancelWidth: CGFloat { Self.fitting(Button("Cancel") {}).width }
