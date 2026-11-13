@@ -223,6 +223,12 @@ struct ResetAttempts {
         result.attemptEnding
     }
 
+    /// Whether the account holds an attempt whose retry reuses its id: one
+    /// that is unfinished and has had no definite answer.
+    func isRetryable(_ accountID: UUID) -> Bool {
+        pending[accountID] != nil && ambiguous.contains(accountID)
+    }
+
     /// The unfinished attempt's id when it was started for `choice`, without
     /// starting one: a retry never becomes a new attempt.
     func pendingID(for accountID: UUID, choice: ResetKind.Key?) -> UUID? {

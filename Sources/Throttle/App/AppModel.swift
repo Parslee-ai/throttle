@@ -264,6 +264,7 @@ final class AppModel {
                 let state = await scheduler.resetAttemptState(for: accountID)
                 guard resetGates[accountID] == .awaitingReading, !resetsInFlight.contains(accountID) else { continue }
                 adoptAttemptState(state, for: accountID, label: nil)
+                settleResetMessage(accountID)
             }
         }
     }
@@ -371,7 +372,7 @@ final class AppModel {
                 otherKindSpendable: ResetMessages.otherKindSpendable(statuses[account.id]?.status.resetKinds,
                                                                      besides: choice.kind)
             ) else { return }
-            showResetNotice(notice, for: account.id, kindLabel: label)
+            settleResetMessage(account.id, to: notice, kindLabel: label)
         }
     }
 
@@ -411,7 +412,7 @@ final class AppModel {
         } else {
             if windowed, resetGates[accountID] != nil { return }
             guard let count = statuses[accountID]?.status.resetCreditsAvailable, count > 0 else {
-                showResetNotice(ResetNotice(ResetMessages.noResets, kind: .failure), for: accountID, kindLabel: kindLabel)
+                settleResetMessage(accountID, to: ResetNotice(ResetMessages.noResets, kind: .failure), kindLabel: kindLabel)
                 return
             }
             guard let id = resetAttempts.attemptID(for: accountID, choice: choice) else { return }
@@ -438,10 +439,9 @@ final class AppModel {
                 adoptAttemptState(state, for: accountID, label: kindLabel)
             }
             let otherSpendable = ResetMessages.otherKindSpendable(statuses[accountID]?.status.resetKinds, besides: choice)
-            if let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(),
-                                                 kindLabel: kindLabel, otherKindSpendable: otherSpendable) {
-                showResetNotice(notice, for: accountID, kindLabel: kindLabel)
-            }
+            let notice = ResetMessages.notice(for: result, providerName: providerName, now: Date(),
+                                              kindLabel: kindLabel, otherKindSpendable: otherSpendable)
+            settleResetMessage(accountID, to: notice, kindLabel: kindLabel, endingAttempt: true)
         }
     }
 
@@ -456,9 +456,8 @@ final class AppModel {
     ///
     /// With `closedWithNoClick`, the attempt has just been closed by its
     /// window ending, and a row now waiting for a reading says so.
-    private func adoptAttemptState(_ state: ResetAttemptState?, for accountID: UUID, label: String?,
-                                   closedWithNoClick: Bool = false) {
-        defer { settleRetryMessage(accountID, closedWithNoClick: closedWithNoClick) }
+    /// The row's message is the caller's to settle once the state is in.
+    private func adoptAttemptState(_ state: ResetAttemptState?, for accountID: UUID, label: String?) {
         resetAttempts.adopt(accountID, state: state)
         switch state {
         case .retryable(let attemptID, let choice, _):
@@ -487,11 +486,13 @@ final class AppModel {
             guard !Task.isCancelled, closed == .awaitingReading,
                   !resetsInFlight.contains(accountID) else { return }
             retryWindowTasks[accountID] = nil
-            adoptAttemptState(closed, for: accountID, label: nil, closedWithNoClick: true)
+            adoptAttemptState(closed, for: accountID, label: nil)
+            settleResetMessage(accountID, endingAttempt: true)
             let after = await scheduler.readAfterClosedAttempt(accountID)
             guard !Task.isCancelled, resetGates[accountID] == .awaitingReading,
                   !resetsInFlight.contains(accountID) else { return }
             adoptAttemptState(after, for: accountID, label: nil)
+            settleResetMessage(accountID)
         }
     }
 
@@ -499,21 +500,36 @@ final class AppModel {
         retryWindowTasks.removeValue(forKey: accountID)?.cancel()
     }
 
-    /// A message offering a free retry stays only while a retry is what the
-    /// row offers. Once the attempt has ended the next click is a new attempt
-    /// that can spend a reset, so the promise goes: a row now waiting for a
-    /// fresh reading reads "Unexpected answer", any other loses the message.
-    private func settleRetryMessage(_ accountID: UUID, closedWithNoClick: Bool = false) {
-        if case .retryOnly = resetGates[accountID] { return }
+    /// Decides what the row says about its reset, and is the only place that
+    /// does: every caller has already adopted the attempt's final state.
+    /// `notice` is the message for what just happened (a result, a held
+    /// click); without one, the row's current message is checked again.
+    ///
+    /// A message promising a free retry stays only while the row holds a
+    /// retryable attempt. Otherwise the next click is a new attempt that can
+    /// spend a reset, so the promise goes: it reads "Unexpected answer" when
+    /// the attempt has just ended with no definite answer (`endingAttempt`)
+    /// or the row waits for a fresh reading, and is dropped otherwise.
+    private func settleResetMessage(_ accountID: UUID, to notice: ResetNotice?? = .none,
+                                    kindLabel: String? = nil, endingAttempt: Bool = false) {
         let waiting = resetGates[accountID] == .awaitingReading
-        guard (closedWithNoClick && waiting) || resetNotices[accountID]?.promisesRetry == true else { return }
-        guard waiting, let account = accounts.first(where: { $0.id == accountID }),
-              let notice = ResetMessages.notice(for: .outcome(.unexpected), providerName: account.provider.displayName,
-                                                now: Date()) else {
-            resetNotices[accountID] = nil
-            return
+        var shown = notice ?? resetNotices[accountID]
+        if endingAttempt, notice == nil, waiting {
+            shown = unexpectedAnswer(accountID)
         }
-        showResetNotice(notice, for: accountID)
+        if shown?.promisesRetry == true, !resetAttempts.isRetryable(accountID) {
+            shown = endingAttempt || waiting ? unexpectedAnswer(accountID) : nil
+        }
+        if let shown {
+            showResetNotice(shown, for: accountID, kindLabel: kindLabel)
+        } else {
+            resetNotices[accountID] = nil
+        }
+    }
+
+    private func unexpectedAnswer(_ accountID: UUID) -> ResetNotice? {
+        guard let account = accounts.first(where: { $0.id == accountID }) else { return nil }
+        return ResetMessages.notice(for: .outcome(.unexpected), providerName: account.provider.displayName, now: Date())
     }
 
     /// Drops everything the model holds about the account's attempt.
@@ -521,7 +537,7 @@ final class AppModel {
         resetAttempts.forget(accountID)
         resetGates[accountID] = nil
         stopWatchingRetryWindow(accountID)
-        settleRetryMessage(accountID)
+        settleResetMessage(accountID)
     }
 
     /// A login for the account finished, new or repeated. Whatever the
@@ -539,8 +555,10 @@ final class AppModel {
     }
 
     /// Every reset message reaches the row and VoiceOver here, and only
-    /// here, so each is announced once and with the kind it was for.
+    /// here, so each is announced once and with the kind it was for. Only
+    /// `settleResetMessage` calls it.
     private func showResetNotice(_ notice: ResetNotice, for accountID: UUID, kindLabel: String? = nil) {
+        guard resetNotices[accountID]?.id != notice.id else { return }
         resetNotices[accountID] = notice
         NSAccessibility.post(
             element: NSApp as Any,
