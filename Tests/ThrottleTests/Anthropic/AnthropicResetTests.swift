@@ -671,7 +671,7 @@ final class AnthropicResetTests: XCTestCase {
         guard case UsageError.httpStatus(let code) = error else { return XCTFail("got \(error)") }
         XCTAssertEqual(code, 500)
         for rendering in [String(describing: error), String(reflecting: error), error.localizedDescription] {
-            XCTAssertFalse(rendering.contains(FakeToken.anthropicLeak), rendering)
+            XCTAssertFalse(rendering.contains(FakeToken.anthropicPrefix), rendering)
             XCTAssertFalse(rendering.contains(AnthropicSampleSecret.accessToken), rendering)
         }
     }
