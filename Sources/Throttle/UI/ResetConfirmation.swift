@@ -324,10 +324,27 @@ struct ResetKindPicker: View {
         .accessibilityLabel("Reset to use")
     }
 
+    /// A plain button rather than a tap gesture: a button takes the click
+    /// that brings the panel forward, and VoiceOver's press, with no extra
+    /// wiring. It stays out of the Tab order, which the list itself holds.
     private func line(_ kind: ResetKind) -> some View {
         let blocked = reason(kind)
         let isPicked = picked == kind.key
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+        return Button {
+            guard blocked == nil else { return }
+            picked = kind.key
+            cursor = kind.key
+        } label: {
+            lineLabel(kind, blocked: blocked, isPicked: isPicked)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .accessibilityLabel(Self.accessibilityLabel(for: kind, reason: blocked, picked: isPicked))
+        .accessibilityAddTraits(isPicked ? .isSelected : [])
+    }
+
+    private func lineLabel(_ kind: ResetKind, blocked: String?, isPicked: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: isPicked ? "largecircle.fill.circle" : "circle")
                 .font(.system(size: 12))
                 .foregroundStyle(isPicked ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
@@ -356,17 +373,6 @@ struct ResetKindPicker: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard blocked == nil else { return }
-            picked = kind.key
-            cursor = kind.key
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.accessibilityLabel(for: kind, reason: blocked, picked: isPicked))
-        .accessibilityAddTraits(isPicked ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction {
-            if blocked == nil { picked = kind.key }
-        }
     }
 
     /// `2 Full reset, picked`, or `1 <model> reset, unavailable: Paused`.
