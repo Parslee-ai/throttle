@@ -385,5 +385,59 @@ final class ResetConfirmationFlowTests: XCTestCase {
         let ids = try flow.kinds.requestIDs()
         XCTAssertEqual(ids.count, 2)
         XCTAssertEqual(ids.first, ids.last, "the retry is the same attempt")
+        XCTAssertEqual(flow.model.resetNotices[a.id]?.text, "Testmodel reset used — limits refreshed",
+                       "the kind is named from the gate once the reading has dropped it")
+    }
+
+    /// A failed read after an unanswered send dims the row; the retry is
+    /// still offered, while a new attempt on a dimmed row is not.
+    func testRetryIsNotGreyedByADimmedRow() {
+        let zero = ResetKind(key: .modelRefill, label: "Testmodel reset", count: 0)
+        let retry = ResetGate.retryOnly(kind: .modelRefill, label: "Testmodel reset")
+        let now = ClaudeKindsFixture.start
+        XCTAssertNil(ResetOffer(count: 0, kinds: [zero], dimmed: true, gate: retry, now: now).disabledReason)
+        XCTAssertNil(ResetOffer(count: 0, kinds: nil, dimmed: true, gate: retry, now: now).disabledReason)
+        XCTAssertEqual(ResetOffer(count: 1, kinds: [ResetKind(key: .full, label: "Full reset", count: 1)],
+                                  dimmed: true, gate: nil, now: now).disabledReason,
+                       "Refresh this account first")
+    }
+
+    /// A row with no kinds keeps its retry too, at whatever count it reads,
+    /// and its card sends the retry, not a new attempt.
+    func testRetryOnARowWithoutKinds() {
+        let retry = ResetGate.retryOnly(kind: nil, label: nil)
+        let now = ClaudeKindsFixture.start
+        XCTAssertEqual(AccountRow.resetCount(credits: nil, gate: retry), 0)
+        XCTAssertNil(ResetOffer(count: 0, kinds: nil, dimmed: false, gate: retry, now: now).disabledReason)
+        XCTAssertNil(ResetOffer(count: 0, kinds: nil, dimmed: true, gate: retry, now: now).disabledReason)
+        XCTAssertEqual(ResetOffer(count: 0, kinds: nil, dimmed: false, gate: nil, now: now).disabledReason,
+                       "No resets available", "a new attempt at 0 is still refused")
+
+        var confirmed: [ResetConfirmation.Choice] = []
+        let card = ResetConfirmation(displayName: "Row", count: 0, windows: [], kinds: nil, gate: retry,
+                                     onChoice: { confirmed.append($0) }, onCancel: {})
+        card.onConfirm()
+        XCTAssertEqual(confirmed, [ResetConfirmation.Choice(kind: nil, label: nil, retrying: true)])
+    }
+
+    /// With every kind at 0 and no attempt pending, a confirmed pick sends
+    /// nothing and the row says why.
+    func testNewAttemptRefusedWhenNothingIsSpendable() throws {
+        let flow = try started()
+        let a = flow.account
+        flow.kinds.http.enqueue(status: 200, body: try ClaudeKindsFixture.body(
+            withResetBlock: #"{"eligible":false,"ineligible_reason":"no_grant"}"#
+        ))
+        try HostedResetFlow.wait("a reading with nothing to spend") {
+            await flow.kinds.clock.advance(by: BackoffPolicy.errorCap + 1)
+            flow.model.refreshAll()
+            await flow.harness.waitForStatus("no resets") { $0[a.id]?.status.resetCreditsAvailable == nil }
+        }
+        let sent = flow.kinds.http.requests.count
+        flow.model.confirmReset(a, choice: choice(.modelRefill))
+        flow.model.useReset(a, choice: .modelRefill)
+        XCTAssertNil(flow.model.resetTasks[a.id])
+        XCTAssertEqual(flow.kinds.http.requests.count, sent)
+        XCTAssertEqual(flow.model.resetNotices[a.id]?.text, "No resets available")
     }
 }

@@ -393,9 +393,11 @@ final class AppModel {
         guard !resetsInFlight.contains(account.id) else { return }
         let accountID = account.id
         let windowed = scheduler.hasResetRetryWindow(account.provider)
-        // Taken now: the read after the attempt may drop the kind.
+        // Taken now: the read after the attempt may drop the kind. A retry
+        // whose kind is already gone keeps the label its gate was given.
         let kindLabel = choice.flatMap { key in
             statuses[accountID]?.status.resetKinds?.first { $0.key == key }?.label
+                ?? retryLabel(for: accountID, choice: key)
         }
         let attemptID: UUID
         if retrying {
@@ -437,6 +439,11 @@ final class AppModel {
                 showResetNotice(notice, for: accountID, kindLabel: kindLabel)
             }
         }
+    }
+
+    private func retryLabel(for accountID: UUID, choice: ResetKind.Key) -> String? {
+        guard case .retryOnly(choice, let label) = resetGates[accountID] else { return nil }
+        return label
     }
 
     /// Sets the row's gate from the scheduler's word on its attempt. `label`

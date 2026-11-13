@@ -270,7 +270,7 @@ struct AccountRow: View {
     /// resets at all, because the reset it retries may already be spent.
     static func resetCount(credits: Int?, gate: ResetGate?) -> Int? {
         if let credits { return credits }
-        if case .retryOnly(_?, _) = gate { return 0 }
+        if case .retryOnly = gate { return 0 }
         return nil
     }
 

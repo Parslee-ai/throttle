@@ -77,9 +77,13 @@ struct ResetOffer {
     /// Why the Use reset button is greyed, or `nil` when it works.
     var disabledReason: String? {
         if case .awaitingReading = gate { return ResetMessages.waitingForFreshReading }
+        // A retry resends the one reset already chosen, under the same
+        // attempt, so neither the reading's counts nor a failed read since
+        // (which dims the row) can make it a different spend.
+        if retryKind != nil { return nil }
+        if case .retryOnly(nil, _) = gate, !hasKinds { return nil }
         guard hasKinds else { return Self.disabledReason(count: count, dimmed: dimmed) }
         if dimmed { return "Refresh this account first" }
-        if retryKind != nil { return nil }
         if kinds.contains(where: { reason(for: $0) == nil }) { return nil }
         if kinds.allSatisfy({ $0.count == 0 }) { return ResetMessages.noResets }
         if kinds.count == 1, let only = kinds.first, let reason = reason(for: only) { return reason }
