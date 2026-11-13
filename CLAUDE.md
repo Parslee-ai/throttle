@@ -14,6 +14,25 @@ Swift 6 language mode, SwiftUI, `MenuBarExtra`, macOS 14 minimum. Bundle
 identifier `ai.parslee.throttle`, `LSUIElement` true, so there is no Dock icon
 and no main window. There are no third-party dependencies and none may be added.
 
+### Development identity
+
+The Debug configuration builds `ai.parslee.throttle.dev`. `AppIdentity` derives
+everything a copy keeps from the running bundle's identifier: the Keychain
+service, the data folder under Application Support (`Throttle` for the release,
+`Throttle Dev` otherwise), and the update cache. Only the exact release
+identifier gets the release's locations; anything else is a development build.
+Nothing else in `Sources/` may name these (`IdentityLiteralTests`).
+
+- A development build keeps its own accounts, Keychain items and settings. It
+  never reads, migrates or copies the release's store, so it can never rotate a
+  real token out from under the installed app.
+- A development build never registers or unregisters launch at login, and never
+  checks for, downloads or installs an update. Both controls are disabled with
+  the reason "Not available in a development build".
+- The unit tests run inside the Debug app, so `AppIdentity.current` is the
+  development identity there. A test that models the release passes
+  `AppIdentity.release` explicitly, as `ModelHarness` does.
+
 ## Commands
 
 ```bash
@@ -117,10 +136,11 @@ the detail window reaches it; no poll, timer, wake, or launch does.
 Tokens are the part of this app that can hurt a user, so the rules are strict.
 
 - **Keychain only.** Access tokens, refresh tokens, expiry, and the provider
-  account id live in the Keychain under service `ai.parslee.throttle`, keyed by
-  the account UUID. They never go in a plist, in `accounts.json`, in
-  UserDefaults, in a log, or in a crash report. `Account` is the non-secret
-  record and a unit test fails the build if a token-shaped key appears in it.
+  account id live in the Keychain under service `ai.parslee.throttle` (a
+  development build uses its own service), keyed by the account UUID. They
+  never go in a plist, in `accounts.json`, in UserDefaults, in a log, or in a
+  crash report. `Account` is the non-secret record and a unit test fails the
+  build if a token-shaped key appears in it.
 - **One store, never two.** Throttle owns its own login and its own Keychain
   items. It does not read or write another app's credentials outside the
   explicit, user-initiated import, which copies once and never writes back. Two
@@ -170,7 +190,7 @@ Two rules for tests, both learned the hard way:
   `Tests/ThrottleTests/FakeToken.swift`, which assembles them at run time. A
   literal that looks like a real key trips secret scanners on this public
   repository and can block a push.
-- **No test host left running.** The Debug build shares the release's bundle
-  identifier, so it shares its account store and Keychain service. After a test
-  run, check that no `build/DerivedData/.../Throttle.app` process is still
-  alive, and never launch a Debug build by hand on a Mac with real accounts.
+- **No test host left running.** The Debug build has its own identity and its
+  own store, so a leftover host no longer reads real accounts, but it still runs
+  a poller and holds a menu bar item. After a test run, check that no
+  `build/DerivedData/.../Throttle.app` process is still alive, and stop it.

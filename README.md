@@ -139,6 +139,12 @@ scripts/test.sh    # unit tests
 
 There are no third-party dependencies. Everything is Apple frameworks.
 
+A Debug build is a separate app as far as your Mac is concerned. Its bundle
+identifier is `ai.parslee.throttle.dev`, so it keeps its own accounts (under
+`~/Library/Application Support/Throttle Dev`), its own Keychain items and its
+own settings, and never sees the accounts of an installed Throttle. It never
+launches at login and never updates itself; both controls are disabled in it.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
