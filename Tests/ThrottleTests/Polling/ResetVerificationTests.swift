@@ -175,6 +175,44 @@ final class ResetVerificationTests: XCTestCase {
         }
     }
 
+    // MARK: ISC-521: a failed reset leaves no id on disk
+
+    /// Through the real Claude adapter and scheduler, a 403 refusal, a 429
+    /// and a 500 whose bodies echo the organization, grant and request ids
+    /// leave none of them in `diagnostics.log` or any other file the app
+    /// wrote, nor in the row's message, whichever line carried them.
+    func testFailedResetLineHidesIDs() async throws {
+        let attempt = try XCTUnwrap(UUID(uuidString: "5E17E1E1-0000-4000-8000-0000000000AA"))
+        let org = ClaudeKindsFixture.organization
+        let grant = ClaudeKindsFixture.refillGrant
+        let request = attempt.uuidString.lowercased()
+        let echo = #"{"error":"boom","org":"\#(org)","grant":"\#(grant)","request":"\#(attempt.uuidString)"}"#
+        let refusal = #"{"type":"error","error":{"type":"permission_error","message":"org \#(org) grant \#(grant) request \#(request) not allowed"}}"#
+        let cases: [(Int, String, [String: String])] = [(403, refusal, [:]), (429, echo, ["Retry-After": "30"]), (500, echo, [:])]
+        for (status, body, headers) in cases {
+            let kinds = ClaudeKindsFixture(withDiagnostics: true)
+            let account = try await kinds.addAccountAndReadOnce()
+            kinds.http.enqueue(status: status, body: Data(body.utf8), headers: headers)
+            try kinds.enqueueReading()
+
+            let result = await kinds.scheduler.useReset(accountID: account.id, attemptID: attempt, choice: .modelRefill)
+            XCTAssertEqual(try kinds.grantIDs(), [grant], "HTTP \(status): the reset went out with the marker grant")
+
+            let files = try kinds.writtenFiles()
+            let log = AppPaths(applicationSupportDirectory: kinds.fixture.directory).diagnosticsFile.lastPathComponent
+            let lines = try XCTUnwrap(files.first { $0.name == log }?.text, "HTTP \(status): no diagnostics log")
+            XCTAssertTrue(lines.contains("Reset attempt ended"), "HTTP \(status): the scheduler's line was written")
+            XCTAssertTrue(lines.contains(#""kind":"reset""#), "HTTP \(status): the adapter's line was written")
+            let notice = ResetMessages.notice(for: result, providerName: "Claude", now: kinds.clock.now())?.text ?? ""
+            for (name, text) in files + [("the row's message", notice)] {
+                for id in [org, grant, request] {
+                    XCTAssertFalse(text.localizedCaseInsensitiveContains(id), "HTTP \(status): \(name) holds \(id)")
+                }
+            }
+            await kinds.cleanUp()
+        }
+    }
+
     // MARK: ISC-343: sign-in needed, then a good poll re-enables the button
 
     /// A row holding resets whose token is rejected: the count stays, the

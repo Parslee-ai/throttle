@@ -22,30 +22,51 @@ struct ClaudeKindsFixture {
     /// Holds each POST, once recorded, until the test opens it.
     let posts: HeldPosts
     let scheduler: PollScheduler
+    /// The diagnostics log the adapter and the scheduler share, when asked
+    /// for; it lives under the fixture's directory.
+    let diagnostics: Diagnostics?
 
-    init(settings: PollSettings = PollSettings(stagger: 0)) {
-        self.init(fixture: PollingFixture(settings: settings, clock: TestClock(start: Self.start)))
+    init(settings: PollSettings = PollSettings(stagger: 0), withDiagnostics: Bool = false) {
+        self.init(fixture: PollingFixture(settings: settings, clock: TestClock(start: Self.start)),
+                  withDiagnostics: withDiagnostics)
     }
 
     /// A Claude scheduler over `fixture`'s store, cache and clock, such as a
     /// relaunch of an earlier fixture.
-    init(fixture: PollingFixture) {
+    init(fixture: PollingFixture, withDiagnostics: Bool = false) {
         let clock = fixture.clock
         let http = AnthropicMockHTTPClient()
         let posts = HeldPosts(http)
+        let paths = AppPaths(applicationSupportDirectory: fixture.directory)
+        let diagnostics = withDiagnostics ? Diagnostics(paths: paths) : nil
         self.fixture = fixture
         self.http = http
         self.posts = posts
+        self.diagnostics = diagnostics
         scheduler = PollScheduler(
             store: fixture.store,
-            providers: [.anthropic: AnthropicProvider(client: posts, now: { clock.now() }), .openai: fixture.openai],
+            providers: [
+                .anthropic: AnthropicProvider(client: posts, now: { clock.now() }, diagnostics: diagnostics),
+                .openai: fixture.openai,
+            ],
             resolver: fixture.resolver,
             cache: fixture.cache,
             settings: fixture.settings,
             clock: clock,
-            backoffPersistence: BackoffPersistence(paths: AppPaths(applicationSupportDirectory: fixture.directory)),
+            backoffPersistence: BackoffPersistence(paths: paths),
+            diagnostics: diagnostics,
             postResetReadDelay: 0
         )
+    }
+
+    /// Every file under the fixture's directory, by name, with its text.
+    func writtenFiles() throws -> [(name: String, text: String)] {
+        let root = fixture.directory
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+        return try FileManager.default.subpathsOfDirectory(atPath: root.path)
+            .map { root.appendingPathComponent($0) }
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .map { ($0.lastPathComponent, String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
     }
 
     var clock: TestClock { fixture.clock }

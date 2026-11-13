@@ -389,6 +389,10 @@ struct AnthropicProvider: UsageProvider {
         // Pin before the send: once the POST may have reached the provider,
         // every resend of this attempt names the same grant and organization.
         await grants.pin(grantID, organizationUUID: orgUUID, choice: choice, for: account.id, attemptID: attemptID)
+        // Before the send, so no line about this attempt, the adapter's or
+        // the scheduler's, can carry its ids. The URL's stand-in for the
+        // organization is public and stays readable.
+        await diagnostics?.hide([orgUUID, grantID, requestID].filter { $0 != Self.hiddenOrganizationID })
         let response = try await send(request)
         if response.statusCode != 200 {
             await diagnoseReset(
@@ -406,7 +410,9 @@ struct AnthropicProvider: UsageProvider {
             Self.logger.error("Reset rejected with HTTP 401")
             throw UsageError.needsLogin
         case 403:
-            if let message = Self.permissionRefusal(in: response.body) {
+            if let refusal = Self.permissionRefusal(in: response.body) {
+                // The provider's words reach the row; the attempt's ids do not.
+                let message = Self.removing([orgUUID, grantID, requestID], from: refusal)
                 Self.logger.error("Reset forbidden for this organization: \(message, privacy: .public)")
                 throw UsageError.forbidden(reason: message)
             }
