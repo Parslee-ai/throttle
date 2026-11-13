@@ -5,10 +5,14 @@ import XCTest
 /// A real `AppModel` over a `PollingFixture`: the fixture's store, cache,
 /// scheduler, and mocks, with a status-cache file and a private
 /// UserDefaults suite under the fixture's directory. Nothing touches the
-/// user's Keychain, defaults, or network.
+/// user's Keychain, defaults, network, or login items.
+///
+/// The model is the release's unless a test asks for another identity: the
+/// tests run inside the Debug app, whose own identity is a development build.
 @MainActor
 struct ModelHarness {
     let fixture: PollingFixture
+    let loginItems: RecordingLoginItems
     /// The scheduler the model drives: the fixture's unless one was given.
     let scheduler: PollScheduler
     let model: AppModel
@@ -23,7 +27,8 @@ struct ModelHarness {
     /// providers; it must share the fixture's store, cache, and clock.
     init(
         fixture: PollingFixture,
-        scheduler: PollScheduler? = nil
+        scheduler: PollScheduler? = nil,
+        identity: AppIdentity = .release
     ) {
         self.fixture = fixture
         self.scheduler = scheduler ?? fixture.scheduler
@@ -34,6 +39,8 @@ struct ModelHarness {
         let diagnostics = Diagnostics(paths: paths)
         let fade = Gate()
         successNoteFade = fade
+        let loginItems = RecordingLoginItems()
+        self.loginItems = loginItems
         model = AppModel(
             settings: AppSettings(defaults: UserDefaults(suiteName: suite)!),
             store: fixture.store,
@@ -42,6 +49,8 @@ struct ModelHarness {
             scheduler: self.scheduler,
             registry: ProviderRegistry(diagnostics: diagnostics),
             diagnostics: diagnostics,
+            identity: identity,
+            loginItems: loginItems,
             successNoteExpiry: { await fade.wait() }
         )
     }
