@@ -195,10 +195,10 @@ struct ResetConfirmation: View {
 
     // MARK: Drawing
 
-    /// The kind the card would spend, when it has one.
-    /// The pick stands when a reading drops its kind while the card is open:
-    /// confirming it then sends nothing and the row says why. The card never
-    /// moves onto a kind the owner did not pick.
+    /// The kind the card would spend, when it has one. The pick stands when a
+    /// reading drops its kind while the card is open: confirming it then
+    /// sends nothing and the row says why. The card never moves onto a kind
+    /// the owner did not pick.
     private var chosenKind: ResetKind.Key? {
         offer.retryKind ?? picked
     }
