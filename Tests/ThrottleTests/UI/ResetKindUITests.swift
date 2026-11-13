@@ -213,15 +213,8 @@ final class ResetKindUITests: XCTestCase {
                     displayName: "Work", count: 3, windows: [], kinds: [full2, fable1], gate: nil, now: now,
                     picked: picked, onChoice: { choices.append($0) }, onCancel: { cancels += 1 }
                 )
-                let hosting = NSHostingView(rootView: card)
-                // Off screen: it needs to be key, not seen.
-                let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 300),
-                                      styleMask: [.titled], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentView = hosting
-                window.makeKeyAndOrderFront(nil)
+                let window = HostedResetFlow.host(card)
                 defer { window.close() }
-                RunLoop.main.run(until: Date().addingTimeInterval(0.2))
                 let event = try XCTUnwrap(NSEvent.keyEvent(
                     with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                     windowNumber: window.windowNumber, context: nil,

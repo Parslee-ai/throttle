@@ -35,8 +35,12 @@ struct HostedResetFlow {
         return HostedResetFlow(kinds: kinds, harness: harness, account: account)
     }
 
+    /// Bounded: a teardown that never returns would hold the whole run.
     func cleanUp() async {
-        await harness.cleanUp()
+        let harness = harness
+        await awaitEvent("the hosted flow's clean-up", within: Self.waitLimit) { @MainActor in
+            await harness.cleanUp()
+        }
     }
 
     /// The card as `DetailWindow` builds it for this account now, with the
@@ -68,27 +72,33 @@ struct HostedResetFlow {
 
     // MARK: Waiting
 
+    /// How long any one step of a hosted test may take. Every step here
+    /// finishes in well under a second; the limit only turns a stuck step
+    /// into a failure instead of a run that never ends.
+    static let waitLimit: Duration = .seconds(10)
+
     /// Runs `body` on the main actor and spins the main run loop until it
-    /// returns. Fails after `timeout`, which only happens when something is
-    /// stuck.
+    /// returns. Fails after `waitLimit`, which only happens when something
+    /// is stuck; the work is then cancelled so nothing it left running
+    /// reaches a later test.
     @discardableResult
     static func wait<T>(
         _ description: String,
-        timeout: TimeInterval = 10,
         file: StaticString = #filePath,
         line: UInt = #line,
         _ body: @escaping @MainActor () async throws -> T
     ) throws -> T {
         let box = ResultBox<T>()
-        Task { @MainActor in
+        let task = Task { @MainActor in
             do { box.result = .success(try await body()) } catch { box.result = .failure(error) }
         }
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(TimeInterval(waitLimit.components.seconds))
         while box.result == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.005))
         }
         guard let result = box.result else {
-            XCTFail("Timed out waiting for \(description)", file: file, line: line)
+            task.cancel()
+            XCTFail("Timed out after \(waitLimit) waiting for \(description)", file: file, line: line)
             throw CancellationError()
         }
         return try result.get()
@@ -101,15 +111,25 @@ struct HostedResetFlow {
 
     // MARK: Hosting
 
-    /// Shows `view` in a key window off screen: it needs to be key, not seen.
+    /// Shows `view` off screen in a window that takes clicks and keys as a
+    /// key window does, whether or not the session can make it key.
     static func host<V: View>(_ view: V) -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 420, height: 420),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = HostWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 420, height: 420),
+                                styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: view)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         settle()
         return window
+    }
+
+    /// A runner with no logged-in window session may never make a window
+    /// key, and a window that is not key turns a first click into a
+    /// focus click that presses nothing. This one reports itself key, so
+    /// what reaches the card does not depend on the session.
+    final class HostWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+        override var isKeyWindow: Bool { true }
     }
 
     /// Lets SwiftUI apply a state change and redraw.
@@ -428,7 +448,11 @@ final class ResetConfirmationFlowTests: XCTestCase {
         // The previous launch: two accounts read once and saved.
         let earlier = ClaudeKindsFixture(settings: PollSettings(stagger: stagger))
         let earlierHarness = ModelHarness(fixture: earlier.fixture, scheduler: earlier.scheduler)
-        addTeardownBlock { await earlierHarness.cleanUp() }
+        addTeardownBlock {
+            await awaitEvent("the previous launch's clean-up", within: HostedResetFlow.waitLimit) { @MainActor in
+                await earlierHarness.cleanUp()
+            }
+        }
         let (first, second) = try HostedResetFlow.wait("the previous launch") {
             let first = try await earlier.fixture.addAccount(.anthropic, email: "fixture-first")
             let second = try await earlier.fixture.addAccount(.anthropic, email: "fixture-second")
@@ -448,15 +472,21 @@ final class ResetConfirmationFlowTests: XCTestCase {
         let kinds = ClaudeKindsFixture(fixture: earlier.fixture.relaunched())
         let harness = ModelHarness(fixture: kinds.fixture, scheduler: kinds.scheduler)
         addTeardownBlock {
-            await kinds.cleanUp()
-            await harness.cleanUp()
+            await awaitEvent("this launch's clean-up", within: HostedResetFlow.waitLimit) { @MainActor in
+                await kinds.cleanUp()
+                await harness.cleanUp()
+            }
         }
         try kinds.enqueueReading()
         kinds.enqueueProfile()
+        // The clock is the previous launch's, which already parked one
+        // stagger sleep: this launch's is the next one.
+        let parkedBefore = kinds.clock.parkedCount(interval: stagger)
         try HostedResetFlow.wait("the first account's reading") {
             harness.model.start()
-            _ = await kinds.clock.parkedSleep(interval: stagger, number: 1)
+            _ = await kinds.clock.parkedSleep(interval: stagger, number: parkedBefore + 1)
             await harness.waitForModel("both rows shown") { $0.statuses[first.id] != nil && $0.statuses[second.id] != nil }
+            await waitUntil("the first account was read") { kinds.usageReads == 1 }
         }
         XCTAssertEqual(kinds.usageReads, 1, "only the first account was read this launch")
         let saved = try XCTUnwrap(harness.model.statuses[second.id])
