@@ -685,6 +685,9 @@ actor PollScheduler {
             return .alreadyRunning
         }
         defer { resetsInFlight.remove(accountID) }
+        // Reads numbered above this one were running at the click or started
+        // after it. Taken before the first suspension.
+        let clickedAt = readSlots[accountID].map { $0.sequence - 1 } ?? readSequence
 
         guard let account = await storedAccount(accountID) else { return .unsupported }
         let provider = account.provider
@@ -770,7 +773,9 @@ actor PollScheduler {
             }
         }
         // Reads numbered above this one started after the reset finished.
-        let completedAt = readSequence
+        // An adapter that wants a reading sent nothing, so a poll's read that
+        // was already running at the click serves as well.
+        let completedAt = result == .outcome(.needsFreshReading) ? clickedAt : readSequence
         await diagnostics?.record(DiagnosticEvent(
             ts: clock.now(),
             provider: provider,

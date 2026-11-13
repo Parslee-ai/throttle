@@ -131,18 +131,21 @@ struct ClaudeKindsFixture {
 
     func cleanUp() async {
         posts.release()
+        posts.releaseReads()
         await scheduler.stop()
         await fixture.cleanUp()
     }
 }
 
 /// Passes every request to the scripted client, and while `hold()` is in
-/// force keeps a POST's answer back until `release()`. The POST is recorded
-/// before it waits, so a test can wait for it to be sent.
+/// force keeps a POST's answer back until `release()`; `holdReads()` does the
+/// same for usage reads. A request is recorded before it waits, so a test can
+/// wait for it to be sent.
 final class HeldPosts: HTTPClient, @unchecked Sendable {
     private let inner: AnthropicMockHTTPClient
     private let lock = NSLock()
     private var gate: Gate?
+    private var readGate: Gate?
 
     init(_ inner: AnthropicMockHTTPClient) {
         self.inner = inner
@@ -162,6 +165,20 @@ final class HeldPosts: HTTPClient, @unchecked Sendable {
         held?.open()
     }
 
+    /// Holds every usage read from now until `releaseReads()`.
+    func holdReads() {
+        lock.lock(); defer { lock.unlock() }
+        if readGate == nil { readGate = Gate() }
+    }
+
+    func releaseReads() {
+        lock.lock()
+        let held = readGate
+        readGate = nil
+        lock.unlock()
+        held?.open()
+    }
+
     func send(_ request: URLRequest, maxBodyBytes: Int) async throws -> HTTPResponse {
         let answer: Result<HTTPResponse, any Error>
         do {
@@ -172,11 +189,19 @@ final class HeldPosts: HTTPClient, @unchecked Sendable {
         if request.httpMethod == "POST", let gate = currentGate() {
             await gate.wait()
         }
+        if request.url == AnthropicEndpoints.usage, let gate = currentReadGate() {
+            await gate.wait()
+        }
         return try answer.get()
     }
 
     private func currentGate() -> Gate? {
         lock.lock(); defer { lock.unlock() }
         return gate
+    }
+
+    private func currentReadGate() -> Gate? {
+        lock.lock(); defer { lock.unlock() }
+        return readGate
     }
 }

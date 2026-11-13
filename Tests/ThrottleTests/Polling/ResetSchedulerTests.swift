@@ -430,6 +430,31 @@ final class ResetSchedulerTests: XCTestCase {
         XCTAssertEqual(entry.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row then lists its kinds")
     }
 
+    /// A click on a row with no reading this launch, while a poll is
+    /// reading that account: the poll's read started before the click, and
+    /// nothing was spent, so its reading is the one the click waits for.
+    func testClickDuringThePollsFirstReadSendsNoSecondRead() async throws {
+        let kinds = ClaudeKindsFixture()
+        let account = try await kinds.fixture.addAccount(.anthropic, email: "fixture-unread")
+        try kinds.enqueueReading()
+        kinds.enqueueProfile()
+        kinds.posts.holdReads()
+        await kinds.scheduler.start()
+        await waitUntil("the poll's read was sent and is held") { kinds.usageReads == 1 }
+
+        let reset = Task { await kinds.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .full) }
+        await waitUntil("the click reached the scheduler") { await kinds.scheduler.isResetInFlight(account.id) }
+        kinds.posts.releaseReads()
+        let result = await reset.value
+
+        XCTAssertEqual(result, .outcome(.needsFreshReading))
+        XCTAssertEqual(kinds.usageReads, 1, "the poll's read served the click")
+        XCTAssertTrue(kinds.postRequests.isEmpty, "nothing was spent")
+        let entry = try await kinds.fixture.requireEntry(account)
+        XCTAssertEqual(entry.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row lists its kinds")
+        await kinds.cleanUp()
+    }
+
     func testBlockedKindSendsNothingMoreAndReadsNothing() async throws {
         let f = makeFixture()
         let account = try await f.addAccount(.anthropic)
