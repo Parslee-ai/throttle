@@ -455,6 +455,39 @@ final class ResetSchedulerTests: XCTestCase {
         await kinds.cleanUp()
     }
 
+    /// A Claude row restored from a 0.5.1 status cache shows a count and no
+    /// kinds, so a click carries no choice: nothing is spent, the account is
+    /// read once, and a kind picked from that reading is the one spent.
+    func testRowFromA051CacheSpendsNothingOnAClickThenSpendsThePickedKind() async throws {
+        let kinds = ClaudeKindsFixture()
+        let account = try await kinds.fixture.addAccount(.anthropic, email: "fixture-claude")
+        let cached = String(decoding: try TestFixtures.data("status-cache-0.5.1"), as: UTF8.self)
+            .replacingOccurrences(of: "11111111-1111-4111-8111-111111111111", with: account.id.uuidString)
+        let restored = try StatusCachePersistence.decode(Data(cached.utf8)).filter { $0.key == account.id }
+        await kinds.fixture.cache.seed(from: restored)
+        let seeded = try await kinds.fixture.requireEntry(account)
+        XCTAssertEqual(seeded.status.resetCreditsAvailable, 3, "the 0.5.1 count")
+        XCTAssertNil(seeded.status.resetKinds, "and no kinds")
+
+        try kinds.enqueueReading()
+        kinds.enqueueProfile()
+        let click = await kinds.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: nil)
+
+        XCTAssertEqual(click, .outcome(.needsFreshReading))
+        XCTAssertTrue(kinds.postRequests.isEmpty, "the click spent nothing")
+        XCTAssertEqual(kinds.usageReads, 1, "the account was read once")
+        let read = try await kinds.fixture.requireEntry(account)
+        XCTAssertEqual(read.status.resetKinds?.map(\.key), [.full, .modelRefill], "the row lists its kinds")
+
+        kinds.enqueueResetAnswer()
+        try kinds.enqueueReading()
+        let pick = await kinds.scheduler.useReset(accountID: account.id, attemptID: UUID(), choice: .modelRefill)
+
+        XCTAssertEqual(pick, .outcome(.reset))
+        XCTAssertEqual(try kinds.grantIDs(), [ClaudeKindsFixture.refillGrant], "the picked kind's grant, once")
+        await kinds.cleanUp()
+    }
+
     func testBlockedKindSendsNothingMoreAndReadsNothing() async throws {
         let f = makeFixture()
         let account = try await f.addAccount(.anthropic)

@@ -261,4 +261,73 @@ final class AnthropicResetKindsTests: XCTestCase {
         XCTAssertEqual(status.resetCreditsAvailable, status.resetKinds?.reduce(0) { $0 + $1.count })
         XCTAssertEqual(status.resetKinds?.map(\.label), ["Full reset", "Testmodel reset"])
     }
+
+    // MARK: Every Claude fixture (ISC-468, ISC-469)
+
+    /// Every Claude usage payload in the test bundle, plus the kinds fixture
+    /// with each malformed block in place of its own, so a fixture added
+    /// later is covered without editing this list.
+    private func everyClaudePayload() throws -> [(name: String, body: Data)] {
+        let urls = Bundle(for: Self.self).urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
+        var payloads: [(name: String, body: Data)] = []
+        for url in urls.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        where url.lastPathComponent.hasPrefix("anthropic-") {
+            let body = try Data(contentsOf: url)
+            guard (try? AnthropicUsageParser.parse(body)) != nil else { continue }
+            payloads.append((url.lastPathComponent, body))
+        }
+        let blocks = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try AnthropicFixtures.data("anthropic-resets-malformed-blocks")) as? [String: Any])
+        for (name, block) in blocks.sorted(by: { $0.key < $1.key }) {
+            var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try kindsFixture()) as? [String: Any])
+            root[AnthropicResetParser.blockKey] = block
+            payloads.append(("malformed \(name)", try JSONSerialization.data(withJSONObject: root)))
+        }
+        let names = Set(payloads.map(\.name))
+        for expected in ["anthropic-resets-kinds.json", "anthropic-resets-two-grants.json",
+                         "anthropic-resets-no-grants.json", "anthropic-resets-ineligible.json", "anthropic-limits.json"] {
+            XCTAssertTrue(names.contains(expected), "\(expected) was found: \(names.sorted())")
+        }
+        return payloads
+    }
+
+    /// One status read through the adapter, as a poll reads it.
+    private func status(of body: Data, provider: AnthropicProvider, account: Account) async throws -> AccountStatus {
+        let credential = AccountCredential(accessToken: AnthropicSampleSecret.accessToken, scopes: ["user:profile", "user:inference"])
+        return try await provider.fetchStatus(account: account, credential: credential)
+    }
+
+    func testTotalIsTheSumOfKindCountsForEveryClaudeFixture() async throws {
+        for (name, body) in try everyClaudePayload() {
+            let client = AnthropicMockHTTPClient(status: 200, body: body)
+            client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
+            let fixed = now
+            let account = Account(id: UUID(), provider: .anthropic, email: "fixture-sum", sortIndex: 0)
+            let status = try await status(of: body, provider: AnthropicProvider(client: client, now: { fixed }), account: account)
+
+            if AnthropicResetParser.parse(body).count == nil {
+                XCTAssertNil(status.resetCreditsAvailable, name)
+                XCTAssertNil(status.resetKinds, name)
+            } else {
+                XCTAssertEqual(status.resetCreditsAvailable, (status.resetKinds ?? []).reduce(0) { $0 + $1.count }, name)
+            }
+        }
+    }
+
+    func testTwoReadsOfOnePayloadGiveEqualStatusesForEveryClaudeFixture() async throws {
+        for (name, body) in try everyClaudePayload() {
+            let client = AnthropicMockHTTPClient(status: 200, body: body)
+            client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
+            client.enqueue(status: 200, body: body)
+            client.enqueue(status: 200, body: try AnthropicFixtures.data("anthropic-profile"))
+            let fixed = now
+            let provider = AnthropicProvider(client: client, now: { fixed })
+            let account = Account(id: UUID(), provider: .anthropic, email: "fixture-equal", sortIndex: 0)
+
+            let first = try await status(of: body, provider: provider, account: account)
+            let second = try await status(of: body, provider: provider, account: account)
+            XCTAssertEqual(first, second, name)
+            XCTAssertEqual(first.hashValue, second.hashValue, name)
+        }
+    }
 }
