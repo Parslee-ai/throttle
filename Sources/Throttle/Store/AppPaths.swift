@@ -9,7 +9,8 @@ import Foundation
 /// never touch the real `~/Library/Application Support/Throttle`.
 struct AppPaths: Sendable, Hashable {
     /// The directory that holds every file Throttle writes.
-    /// Standard location: `~/Library/Application Support/Throttle`.
+    /// Standard location: `~/Library/Application Support/Throttle` for the
+    /// release (see `AppIdentity.dataFolderName`).
     let applicationSupportDirectory: URL
 
     /// The non-secret account list, a JSON array of `Account`.
@@ -41,10 +42,10 @@ struct AppPaths: Sendable, Hashable {
         self.applicationSupportDirectory = applicationSupportDirectory
     }
 
-    /// The real location used by the running app.
-    static var standard: AppPaths {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return AppPaths(applicationSupportDirectory: base.appendingPathComponent("Throttle", isDirectory: true))
+    /// The location a copy of Throttle uses: the release's `Throttle` folder,
+    /// or a development build's own folder beside it.
+    static func standard(for identity: AppIdentity, in directories: UserDirectories = .current) -> AppPaths {
+        AppPaths(applicationSupportDirectory: identity.dataDirectory(in: directories.applicationSupport))
     }
 
     /// Creates the application support directory on first use with mode 0700,

@@ -69,7 +69,8 @@ private struct StoredCredential: Codable {
 /// Keychain, one item per account.
 ///
 /// Item layout (ISC-61):
-/// - service: `ai.parslee.throttle`
+/// - service: `AppIdentity.keychainService` (`ai.parslee.throttle` for the
+///   release, its own service for a development build)
 /// - account: the account's UUID string
 /// - value: JSON of the credential (access token, refresh token, expiry,
 ///   provider account id, scopes) as one blob
@@ -90,14 +91,12 @@ private struct StoredCredential: Codable {
 /// queries another app's items; the explicit import flows copy once from a
 /// user-selected source and never write back.
 final class KeychainStore: CredentialStore {
-    /// The Keychain service name for every Throttle credential.
-    static let service = "ai.parslee.throttle"
-
     private let service: String
 
-    /// - Parameter service: overridable so the integration test can use a
-    ///   throwaway service and leave the real items alone.
-    init(service: String = KeychainStore.service) {
+    /// - Parameter service: the running copy's `AppIdentity.keychainService`,
+    ///   so a development build never opens the release's items; the
+    ///   integration test passes a throwaway service.
+    init(service: String) {
         self.service = service
     }
 

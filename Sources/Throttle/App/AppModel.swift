@@ -102,8 +102,11 @@ final class AppModel {
     let settings: AppSettings
     let rotation: RotationController
     /// The Check for Updates flow. It touches the network only when the user
-    /// clicks the footer button (ISC-179).
-    let updates = UpdateController()
+    /// clicks the footer button (ISC-179), and never in a development build.
+    let updates: UpdateController
+    /// Which copy of Throttle this is. A development build keeps its own
+    /// store and never touches the login item or updates.
+    let identity: AppIdentity
 
     @ObservationIgnored private let store: AccountStore
     @ObservationIgnored private let cache: StatusCache
@@ -112,6 +115,7 @@ final class AppModel {
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let diagnostics: Diagnostics
     @ObservationIgnored private let httpClient: URLSessionHTTPClient
+    @ObservationIgnored private let loginItems: any LoginItemService
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     /// The store's own order (`sortIndex`), where providers may interleave.
     /// Section moves are translated against it.
@@ -127,9 +131,18 @@ final class AppModel {
     /// Waits out the success note's lifetime; the note fades when it returns.
     @ObservationIgnored let successNoteExpiry: @Sendable () async -> Void
 
-    convenience init(settings: AppSettings = AppSettings()) {
-        let paths = AppPaths.standard
-        let store = AccountStore(credentials: KeychainStore(), paths: paths)
+    /// Every location comes from `identity`, so a development build opens
+    /// its own folder and Keychain service and never the release's.
+    /// `directories` and `credentials` are injectable for tests.
+    convenience init(
+        settings: AppSettings = AppSettings(),
+        identity: AppIdentity = .current,
+        directories: UserDirectories = .current,
+        credentials: (_ service: String) -> any CredentialStore = { KeychainStore(service: $0) },
+        loginItems: any LoginItemService = MainAppLoginItem()
+    ) {
+        let paths = AppPaths.standard(for: identity, in: directories)
+        let store = AccountStore(credentials: credentials(identity.keychainService), paths: paths)
         let clock = SystemClock()
         let pollSettings = settings.pollSettings
         let cache = StatusCache(clock: clock, staleAfter: pollSettings.staleAfter)
@@ -153,7 +166,10 @@ final class AppModel {
             ),
             registry: registry,
             diagnostics: diagnostics,
-            httpClient: httpClient
+            httpClient: httpClient,
+            identity: identity,
+            loginItems: loginItems,
+            updates: UpdateController(identity: identity, directories: directories)
         )
     }
 
@@ -169,10 +185,16 @@ final class AppModel {
         registry: ProviderRegistry,
         diagnostics: Diagnostics,
         httpClient: URLSessionHTTPClient = URLSessionHTTPClient(),
+        identity: AppIdentity = .current,
+        loginItems: any LoginItemService = MainAppLoginItem(),
+        updates: UpdateController? = nil,
         successNoteExpiry: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(for: ResetMessages.successLifetime)
         }
     ) {
+        self.identity = identity
+        self.loginItems = loginItems
+        self.updates = updates ?? UpdateController(identity: identity)
         self.settings = settings
         self.store = store
         self.cache = cache
@@ -188,9 +210,11 @@ final class AppModel {
     // MARK: Lifecycle
 
     /// Loads the accounts, starts polling, and starts publishing cache
-    /// updates. Safe to call once; later calls are ignored.
-    func start() {
-        guard !started else { return }
+    /// updates. Safe to call once; later calls are ignored. The returned task
+    /// ends once polling has started; it is for tests.
+    @discardableResult
+    func start() -> Task<Void, Never> {
+        guard !started else { return Task {} }
         started = true
         // Version 0.2.0-rc.1 stored the Claude organization's name, which can
         // hold the email, as the plan. It is no plan; drop it once here.
@@ -200,7 +224,7 @@ final class AppModel {
         let scheduler = scheduler
         let cache = cache
         let persistence = persistence
-        Task {
+        let loading = Task {
             await self.loadAccounts()
             await self.seedCache()
             await persistence.observe(cache)
@@ -213,6 +237,17 @@ final class AppModel {
                 self.apply(snapshot: snapshot)
             }
         }
+        return loading
+    }
+
+    /// Stops polling and publishing. The app never needs it; a test that
+    /// started a model stops it here.
+    func stop() async {
+        updatesTask?.cancel()
+        updatesTask = nil
+        rotation.stop()
+        await scheduler.stop()
+        await persistence.stop()
     }
 
     private func loadAccounts() async {
@@ -302,12 +337,20 @@ final class AppModel {
         Task { await scheduler.update(settings: pollSettings) }
     }
 
+    /// Why the launch-at-login toggle is disabled, or `nil` when it works.
+    /// A development build never registers: a stale copy in a build folder
+    /// would otherwise start at login and poll as if it were the app.
+    var launchAtLoginRestriction: String? {
+        identity.isDevelopmentBuild ? AppIdentity.developmentBuildRestriction : nil
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
+        guard launchAtLoginRestriction == nil else { return }
         do {
             if enabled {
-                try SMAppService.mainApp.register()
+                try loginItems.register()
             } else {
-                try SMAppService.mainApp.unregister()
+                try loginItems.unregister()
             }
             settings.launchAtLogin = enabled
         } catch {
@@ -317,7 +360,8 @@ final class AppModel {
     }
 
     func refreshLaunchAtLoginStatus() {
-        launchAtLoginStatus = SMAppService.mainApp.status
+        guard launchAtLoginRestriction == nil else { return }
+        launchAtLoginStatus = loginItems.status
     }
 
     // MARK: Accounts

@@ -5,7 +5,9 @@ import Observation
 /// relaunch. `UpdateButton` draws `state` and calls the methods here.
 ///
 /// Nothing in this class runs on its own. There is no launch-time or timed
-/// check: the network is touched only when the user clicks.
+/// check: the network is touched only when the user clicks. A development
+/// build never checks at all: an update would replace the installed release
+/// from a development copy.
 @MainActor
 @Observable
 final class UpdateController {
@@ -35,6 +37,10 @@ final class UpdateController {
 
     private(set) var state: State = .idle
 
+    /// Why updates are off for this copy, or `nil` when they work. While set,
+    /// no action reaches the network, the downloader or the installer.
+    let restriction: String?
+
     /// The version this copy of Throttle compares against; `nil` when neither
     /// the bundle nor the override holds a readable one.
     let currentVersion: SemanticVersion?
@@ -47,15 +53,16 @@ final class UpdateController {
     /// The release the Install button installs; set by a successful check.
     @ObservationIgnored private var pendingRelease: AvailableRelease?
 
-    /// Production wiring.
-    convenience init() {
+    /// Production wiring for the running copy.
+    convenience init(identity: AppIdentity, directories: UserDirectories = .current) {
         self.init(
             client: URLSessionHTTPClient(timeout: 15),
             downloader: PackageDownloader(),
             verifier: PackageVerifier(),
             installer: UpdateInstaller(),
             currentVersion: Self.resolveCurrentVersion(),
-            cacheDirectory: Self.defaultCacheDirectory
+            cacheDirectory: identity.updateCacheDirectory(in: directories.caches),
+            restriction: identity.isDevelopmentBuild ? AppIdentity.developmentBuildRestriction : nil
         )
     }
 
@@ -65,21 +72,16 @@ final class UpdateController {
         verifier: any PackageVerifying,
         installer: any UpdateInstalling,
         currentVersion: SemanticVersion?,
-        cacheDirectory: URL
+        cacheDirectory: URL,
+        restriction: String? = nil
     ) {
+        self.restriction = restriction
         self.client = client
         self.downloader = downloader
         self.verifier = verifier
         self.installer = installer
         self.currentVersion = currentVersion
         self.cacheDirectory = cacheDirectory
-    }
-
-    /// `~/Library/Caches/ai.parslee.throttle/Updates`.
-    nonisolated static var defaultCacheDirectory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ai.parslee.throttle", isDirectory: true)
-            .appendingPathComponent("Updates", isDirectory: true)
     }
 
     /// `THROTTLE_UPDATE_CURRENT_VERSION` when it holds a valid version,
@@ -113,7 +115,7 @@ final class UpdateController {
     /// step is running is ignored. The returned task is for tests.
     @discardableResult
     func checkForUpdates() -> Task<Void, Never> {
-        guard !isBusy else { return Task {} }
+        guard restriction == nil, !isBusy else { return Task {} }
         guard let currentVersion else {
             fail(UpdateError.unknownCurrentVersion)
             return Task {}
@@ -142,7 +144,7 @@ final class UpdateController {
     /// on disk to be opened later. The returned task is for tests.
     @discardableResult
     func installUpdate() -> Task<Void, Never> {
-        guard !isBusy, let release = pendingRelease else { return Task {} }
+        guard restriction == nil, !isBusy, let release = pendingRelease else { return Task {} }
 
         // Refuse before downloading anything: an ad-hoc build has no team to
         // hold the package's signature against.

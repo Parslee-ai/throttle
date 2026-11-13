@@ -51,7 +51,12 @@ struct SettingsView: View {
                     get: { model.launchAtLoginStatus == .enabled },
                     set: { model.setLaunchAtLogin($0) }
                 ))
-                if model.launchAtLoginStatus == .requiresApproval {
+                .disabled(model.launchAtLoginRestriction != nil)
+                if let restriction = model.launchAtLoginRestriction {
+                    Text(restriction)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if model.launchAtLoginStatus == .requiresApproval {
                     Text("Approve Throttle under System Settings › General › Login Items.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

@@ -16,6 +16,22 @@ struct UpdateButton: View {
 
     @ViewBuilder
     private var content: some View {
+        if let restriction = controller.restriction {
+            Text(restriction)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .truncationMode(.tail)
+                .help(restriction)
+            Button("Check for Updates") {}
+                .disabled(true)
+                .help(restriction)
+        } else {
+            stateContent
+        }
+    }
+
+    @ViewBuilder
+    private var stateContent: some View {
         switch controller.state {
         case .idle:
             checkButton
