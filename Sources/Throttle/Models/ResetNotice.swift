@@ -15,10 +15,15 @@ struct ResetNotice: Equatable, Sendable, Identifiable {
     let id: UUID
     let text: String
     let kind: Kind
+    /// The words tell the owner a retry of this attempt is free. True only
+    /// while that retry is what the next click sends; the app withdraws the
+    /// message when the attempt ends.
+    let promisesRetry: Bool
 
-    init(_ text: String, kind: Kind, id: UUID = UUID()) {
+    init(_ text: String, kind: Kind, promisesRetry: Bool = false, id: UUID = UUID()) {
         self.id = id
         self.text = text
         self.kind = kind
+        self.promisesRetry = promisesRetry
     }
 }

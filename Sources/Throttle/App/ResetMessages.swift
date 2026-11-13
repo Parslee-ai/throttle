@@ -57,11 +57,12 @@ enum ResetMessages {
         case .providerError(let status) where status >= 500:
             // A gateway can answer 5xx after the provider already spent, so
             // this never claims nothing changed; the retry reuses the attempt.
-            return failure("\(providerName) had a problem (HTTP \(status)). Try again — a retry never spends a second reset.")
+            return failure("\(providerName) had a problem (HTTP \(status)). Try again — a retry never spends a second reset.",
+                           promisesRetry: true)
         case .providerError(let status):
             return failure("\(providerName) couldn't use the reset (HTTP \(status)). Nothing was changed.")
         case .unreachable:
-            return failure("Couldn't reach \(providerName) — check your connection and try again")
+            return failure("Couldn't reach \(providerName) — check your connection and try again", promisesRetry: true)
         case .needsLogin, .alreadyRunning:
             return nil
         }
@@ -128,8 +129,8 @@ enum ResetMessages {
         Redactor.oneLine(raw, maxLength: maxLength)
     }
 
-    private static func failure(_ text: String) -> ResetNotice {
-        ResetNotice(sanitized(text), kind: .failure)
+    private static func failure(_ text: String, promisesRetry: Bool = false) -> ResetNotice {
+        ResetNotice(sanitized(text), kind: .failure, promisesRetry: promisesRetry)
     }
 
     /// `14:05` within a day, the dated stamp beyond that.

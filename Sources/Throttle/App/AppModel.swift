@@ -449,7 +449,12 @@ final class AppModel {
     /// Sets the row's gate from the scheduler's word on its attempt. `label`
     /// is the kind's label at the click; a gate already showing the same
     /// kind keeps its own when the kind has since gone from the reading.
-    private func adoptAttemptState(_ state: ResetAttemptState?, for accountID: UUID, label: String?) {
+    ///
+    /// With `closedWithNoClick`, the attempt has just been closed by its
+    /// window ending, and a row now waiting for a reading says so.
+    private func adoptAttemptState(_ state: ResetAttemptState?, for accountID: UUID, label: String?,
+                                   closedWithNoClick: Bool = false) {
+        defer { settleRetryMessage(accountID, closedWithNoClick: closedWithNoClick) }
         resetAttempts.adopt(accountID, state: state)
         switch state {
         case .retryable(let attemptID, let choice, _):
@@ -478,7 +483,7 @@ final class AppModel {
             guard !Task.isCancelled, closed == .awaitingReading,
                   !resetsInFlight.contains(accountID) else { return }
             retryWindowTasks[accountID] = nil
-            adoptAttemptState(closed, for: accountID, label: nil)
+            adoptAttemptState(closed, for: accountID, label: nil, closedWithNoClick: true)
             let after = await scheduler.readAfterClosedAttempt(accountID)
             guard !Task.isCancelled, resetGates[accountID] == .awaitingReading,
                   !resetsInFlight.contains(accountID) else { return }
@@ -490,11 +495,29 @@ final class AppModel {
         retryWindowTasks.removeValue(forKey: accountID)?.cancel()
     }
 
+    /// A message offering a free retry stays only while a retry is what the
+    /// row offers. Once the attempt has ended the next click is a new attempt
+    /// that can spend a reset, so the promise goes: a row now waiting for a
+    /// fresh reading reads "Unexpected answer", any other loses the message.
+    private func settleRetryMessage(_ accountID: UUID, closedWithNoClick: Bool = false) {
+        if case .retryOnly = resetGates[accountID] { return }
+        let waiting = resetGates[accountID] == .awaitingReading
+        guard (closedWithNoClick && waiting) || resetNotices[accountID]?.promisesRetry == true else { return }
+        guard waiting, let account = accounts.first(where: { $0.id == accountID }),
+              let notice = ResetMessages.notice(for: .outcome(.unexpected), providerName: account.provider.displayName,
+                                                now: Date()) else {
+            resetNotices[accountID] = nil
+            return
+        }
+        showResetNotice(notice, for: accountID)
+    }
+
     /// Drops everything the model holds about the account's attempt.
     private func forgetResetAttempt(_ accountID: UUID) {
         resetAttempts.forget(accountID)
         resetGates[accountID] = nil
         stopWatchingRetryWindow(accountID)
+        settleRetryMessage(accountID)
     }
 
     /// A login for the account finished, new or repeated. Whatever the
